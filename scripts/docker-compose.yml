@@ -2,10 +2,12 @@
 services:
   face-stream:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: scripts/Dockerfile
     container_name: face-stream
     restart: unless-stopped
+    env_file:
+      - .env
 
     # GPU access
     deploy:
@@ -19,29 +21,18 @@ services:
     # Network configuration
     network_mode: host
 
-    # Volume mounts for hot reload
     volumes:
-      # Source code - hot reload
-      - ./signalling.py:/app/signalling.py:ro
-      - ./stream_face.py:/app/stream_face.py:ro
-      - ./view.html:/app/view.html:ro
-      - ./cert.pem:/app/cert.pem:ro
-      - ./key.pem:/app/key.pem:ro
-      # Models and test data (mount parent directories)
-      - ../models:/models:ro
-      - ../extract:/extract:ro
-      - ../testcase:/testcase:ro
+      - ..:/app:ro
 
-    # Environment variables
+    # Environment variables (from .env + defaults)
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - GST_DEBUG=${GST_DEBUG:-2}
       - PYTHONUNBUFFERED=1
       - DISPLAY=${DISPLAY:-:0}
-
-    # Default command (can be overridden)
-    command: ["python3", "signalling.py", "--port", "8555"]
+      - WS_SERVER=${WS_SERVER:-192.168.6.16}
+      - WS_PORT=${WS_PORT:-8555}
 
     # Interactive mode for debugging
     stdin_open: true
@@ -49,7 +40,7 @@ services:
 
     # Health check
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8555/health" , "||", "exit", "1"]
+      test: ["CMD", "curl", "-f", "http://localhost:${WS_PORT:-8555}/health", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3

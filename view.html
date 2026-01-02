@@ -184,9 +184,10 @@
 
     <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
     <script>
-        // Configuration
-        var ws_server = "192.168.6.16";
-        var ws_port = "8443";
+        // Configuration - can be overridden via URL params: ?server=IP&port=PORT
+        const urlParams = new URLSearchParams(window.location.search);
+        var ws_server = urlParams.get('server') || "192.168.6.16";
+        var ws_port = urlParams.get('port') || "8555";
         var rtc_configuration = {iceServers: [{urls: "stun:stun.l.google.com:19302"}]};
         
         // Global variables

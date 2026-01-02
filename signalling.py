@@ -222,8 +222,8 @@ class WebRTCSimpleServer(object):
             chain_pem = os.path.join(self.cert_path, 'fullchain.pem')
             key_pem = os.path.join(self.cert_path, 'privkey.pem')
         else:
-            chain_pem = os.path.join(self.cert_path, 'cert.pem')
-            key_pem = os.path.join(self.cert_path, 'key.pem')
+            chain_pem = os.path.join(self.cert_path, 'scripts/cert.pem')
+            key_pem = os.path.join(self.cert_path, 'scripts/key.pem')
         return chain_pem, key_pem
     
     # def get_ssl_certs(self):
@@ -326,7 +326,7 @@ def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # See: host, port in https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_server
     parser.add_argument('--addr', default='192.168.6.16', help='Address to listen on (default: all interfaces, both ipv4 and ipv6)')
-    parser.add_argument('--port', default=8443, type=int, help='Port to listen on')
+    parser.add_argument('--port', default=int(os.environ.get('WS_PORT', 8443)), type=int, help='Port to listen on')
     parser.add_argument('--keepalive-timeout', dest='keepalive_timeout', default=30, type=int, help='Timeout for keepalive (in seconds)')
     parser.add_argument('--cert-path', default=os.path.dirname(__file__))
     parser.add_argument('--disable-ssl', default=False, help='Disable ssl', action='store_true')

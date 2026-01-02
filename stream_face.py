@@ -10,6 +10,7 @@ import asyncio
 import json
 import ssl
 import sys
+import os
 import platform
 import time
 import ctypes
@@ -30,11 +31,14 @@ import pyds
 # CONFIG
 # ============================================================================
 
-SERVER = 'wss://192.168.6.16:8443'
+# Read from environment variables with defaults
+WS_SERVER = os.environ.get('WS_SERVER', '192.168.6.16')
+WS_PORT = os.environ.get('WS_PORT', '8555')
+SERVER = f'wss://{WS_SERVER}:{WS_PORT}'
 STUN_SERVER = 'stun://stun.l.google.com:19302'
 PEER_ID = '1'
 
-VIDEO_URI = 'file:///home/mq/disk2T/quangnv/face/testcase/faceQuangnv4.mp4'
+VIDEO_URI = 'file:///app/testcase/faceQuangnv4.mp4'
 WIDTH, HEIGHT = 1920, 1080
 
 PGIE_CONFIG = 'models/scrfd640/infer.txt'
@@ -45,9 +49,6 @@ FEATURES_PATH = 'extract/features_arcface.json'
 SKIP_REID = 5
 VOTE_THRESHOLD = 5
 DISTANCE_THRESHOLD = 1.15
-
-# Encoder: 'gpu' (nvv4l2h264enc) or 'cpu' (x264enc)
-ENCODER = 'cpu'
 
 # ============================================================================
 # TRACKER CLASSES
@@ -180,30 +181,14 @@ class WebRTCFaceClient:
         caps2 = self._make_element('capsfilter', 'caps2')
 
         # Encoder (GPU or CPU)
-        if ENCODER == 'gpu':
-            caps2.set_property('caps', Gst.Caps.from_string('video/x-raw(memory:NVMM),format=I420'))
-            # Queue trước encoder để buffer
-            queue_enc = self._make_element('queue', 'queue_enc')
-            queue_enc.set_property('max-size-buffers', 3)
-            queue_enc.set_property('leaky', 2)  # downstream
 
-            enc = self._make_element('nvv4l2h264enc', 'enc')
-            enc.set_property('bitrate', 4000000)
-            enc.set_property('iframeinterval', 30)
-            enc.set_property('control-rate', 1)  # constant bitrate
-            if platform.uname()[4] == 'aarch64':  # Jetson
-                enc.set_property('bufapi-version', 1)
-
-            h264parse = self._make_element('h264parse', 'h264parse')
-            h264parse.set_property('config-interval', -1)
-        else:
-            queue_enc = None
-            caps2.set_property('caps', Gst.Caps.from_string('video/x-raw'))
-            enc = self._make_element('x264enc', 'enc')
-            enc.set_property('tune', 'zerolatency')
-            enc.set_property('speed-preset', 'ultrafast')
-            enc.set_property('key-int-max', 30)
-            h264parse = None
+        queue_enc = None
+        caps2.set_property('caps', Gst.Caps.from_string('video/x-raw'))
+        enc = self._make_element('x264enc', 'enc')
+        enc.set_property('tune', 'zerolatency')
+        enc.set_property('speed-preset', 'ultrafast')
+        enc.set_property('key-int-max', 30)
+        h264parse = None
 
         # RTP
         pay = self._make_element('rtph264pay', 'pay')
@@ -220,10 +205,7 @@ class WebRTCFaceClient:
         self.webrtc.set_property('bundle-policy', 3)
 
         # Link static elements
-        if ENCODER == 'gpu':
-            elements = [conv1, caps1, pgie, tracker, sgie, osd, conv2, caps2, queue_enc, enc, h264parse, pay, rtpcaps]
-        else:
-            elements = [conv1, caps1, pgie, tracker, sgie, osd, conv2, caps2, enc, pay, rtpcaps]
+        elements = [conv1, caps1, pgie, tracker, sgie, osd, conv2, caps2, enc, pay, rtpcaps]
         for i in range(len(elements) - 1):
             elements[i].link(elements[i + 1])
         rtpcaps.link(self.webrtc)
