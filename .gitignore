@@ -3,6 +3,7 @@ models/
 testcase/
 __pycache__/
 .claude/
+node_modules/
 
 # Files
 *.pem
