@@ -22,7 +22,7 @@ services:
     network_mode: host
 
     volumes:
-      - ..:/app:ro
+      - ..:/app
 
     # Environment variables (from .env + defaults)
     environment:

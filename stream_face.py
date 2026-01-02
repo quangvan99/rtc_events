@@ -91,7 +91,9 @@ class TrackerManager:
     def cleanup(self):
         for trk in self.trackers:
             trk.age += 1
+        removed = [t.object_id for t in self.trackers if t.age > self.max_age]
         self.trackers = [t for t in self.trackers if t.age <= self.max_age]
+        return removed
 
     def get(self, oid):
         for trk in self.trackers:
@@ -110,27 +112,30 @@ class WebRTCFaceClient:
         self.conn = None
         self.pipe = None
         self.webrtc = None
+        self.data_channel = None      # DataChannel reference
+        self.sent_faces = set()       # Track sent object_ids
 
         # Face recognition data
-        self.person_names, self.features = self._load_features()
+        self.person_names, self.features, self.avatars = self._load_features()
         self.tracker_mgr = TrackerManager(max_age=30)
         self.fps_count = 0
         self.fps_time = time.time()
 
     def _load_features(self):
-        names, features = [], []
+        names, features, avatars = [], [], {}
         try:
             with open(FEATURES_PATH, encoding='utf-8') as f:
                 data = json.load(f)
             for name, val in data.items():
                 names.append(name)
                 features.append(np.array(val['feature']))
+                avatars[name] = val.get('avatar', '')
             features = np.array(features).squeeze(1)
             print(f'Loaded {len(names)} faces')
         except Exception as e:
             print(f'Load features failed: {e}')
             features = np.array([])
-        return names, features
+        return names, features, avatars
 
     def _make_element(self, factory, name):
         elm = Gst.ElementFactory.make(factory, name)
@@ -228,9 +233,19 @@ class WebRTCFaceClient:
         # WebRTC signals
         self.webrtc.connect('on-negotiation-needed', self._on_negotiation)
         self.webrtc.connect('on-ice-candidate', self._on_ice)
+        self.webrtc.connect('on-data-channel', self._on_data_channel)
 
         self.pipe.set_state(Gst.State.PLAYING)
         print('Pipeline started')
+
+        # Create DataChannel after pipeline is playing (offerer must create it)
+        self.data_channel = self.webrtc.emit('create-data-channel', 'data', None)
+        if self.data_channel:
+            self.data_channel.connect('on-open', self._on_channel_open)
+            self.data_channel.connect('on-close', lambda c: self._on_channel_close())
+            self.data_channel.connect('on-message-string', self._on_channel_message)
+            print('DataChannel created')
+
         return True
 
     def _set_tracker_props(self, tracker):
@@ -258,7 +273,9 @@ class WebRTCFaceClient:
             print(f'FPS: {self.fps_count / (now - self.fps_time):.1f}')
             self.fps_count = 0
             self.fps_time = now
-        self.tracker_mgr.cleanup()
+        removed = self.tracker_mgr.cleanup()
+        for oid in removed:
+            self.sent_faces.discard(oid)
         return Gst.PadProbeReturn.OK
 
     def _probe_skip(self, _, info):
@@ -339,6 +356,7 @@ class WebRTCFaceClient:
 
                     if len(trk.votes) >= VOTE_THRESHOLD:
                         trk.label = self.person_names[np.bincount(trk.votes).argmax()]
+                        self._send_face_event(trk.object_id, trk.label)
 
                 try:
                     l_obj = l_obj.next
@@ -393,6 +411,58 @@ class WebRTCFaceClient:
     def _on_ice(self, _, idx, candidate):
         if '.local' not in candidate:
             self._send(json.dumps({'ice': {'candidate': candidate, 'sdpMLineIndex': idx}}))
+
+    # DataChannel handlers
+    def _on_data_channel(self, _, channel):
+        print('DataChannel received')
+        self.data_channel = channel
+        channel.connect('on-open', self._on_channel_open)
+        channel.connect('on-close', lambda c: self._on_channel_close())
+        channel.connect('on-message-string', self._on_channel_message)
+
+    def _on_channel_open(self, channel):
+        print('DataChannel open')
+        self._send_face_data()
+
+    def _send_face_data(self):
+        """Send avatar data to client when DataChannel opens"""
+        if not self.data_channel:
+            return
+        msg = {
+            'type': 'face_data',
+            'faces': {name: {'avatar': avatar} for name, avatar in self.avatars.items()}
+        }
+        try:
+            self.data_channel.emit('send-string', json.dumps(msg))
+            print(f'Sent face data: {len(self.avatars)} faces')
+        except Exception as e:
+            print(f'Failed to send face data: {e}')
+
+    def _on_channel_close(self):
+        print('DataChannel closed')
+        self.data_channel = None
+
+    def _on_channel_message(self, channel, msg):
+        print(f'DC message: {msg}')
+
+    def _send_face_event(self, object_id, name):
+        if object_id in self.sent_faces:
+            return
+        if not self.data_channel:
+            return
+
+        self.sent_faces.add(object_id)
+        msg = {
+            'type': 'face_detected',
+            'name': name,
+            'timestamp': time.strftime('%H:%M:%S'),
+            'object_id': object_id
+        }
+        try:
+            self.data_channel.emit('send-string', json.dumps(msg))
+            print(f'Sent face event: {name}')
+        except Exception as e:
+            print(f'Failed to send face event: {e}')
 
     def _handle_answer(self, sdp):
         _, msg = GstSdp.SDPMessage.new_from_text(sdp)

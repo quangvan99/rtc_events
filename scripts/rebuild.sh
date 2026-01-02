@@ -11,14 +11,7 @@ echo "Rebuilding and restarting Face Stream containers..."
 # Stop existing containers
 docker compose down
 
-# Rebuild images (no cache if --no-cache flag is passed)
-if [[ "$1" == "--no-cache" ]]; then
-    echo "Building without cache..."
-    docker compose build --no-cache
-else
-    echo "Building with cache..."
-    docker compose build
-fi
+docker compose build --no-cache
 
 # Start containers
 docker compose up -d

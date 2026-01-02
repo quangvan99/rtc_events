@@ -9,8 +9,8 @@ class SaveFeature:
     def __init__(self):
 
         # self.scrfd = SCRFDTRT()
-        self.iresnet = IRES("/home/mq/disk2T/quangnv/models/arcface/arcface_r100.onnx")
-        self.scrfd = SCRFD(model_file='/home/mq/disk2T/quangnv/models/scrfd640/scrfd_2.5g_bnkps_dynamic.onnx')
+        self.iresnet = IRES("models/arcface/arcface_r100.onnx")
+        self.scrfd = SCRFD(model_file='models/scrfd640/scrfd_2.5g_bnkps_dynamic.onnx')
         self.scrfd.prepare(-1)
 
     def save(self, name, image, dict_save):
@@ -26,11 +26,8 @@ class SaveFeature:
             _, buffer = cv2.imencode('.jpg', face_aligned, [cv2.IMWRITE_JPEG_QUALITY, 85])
             avatar_base64 = base64.b64encode(buffer).decode('utf-8')
 
-            face_aligned[65:, 65:, :] = 0
-            feature_mask = self.iresnet.predict(face_aligned)
             dict_save[name] = {
                 "feature": feature.tolist(),
-                "feature_mask": feature_mask.tolist(),
                 "avatar": avatar_base64
             }
 
@@ -38,12 +35,14 @@ import json
 if __name__ == "__main__" :
     save_fea = SaveFeature()
     dict_save = {}
-    for img_path in os.listdir("pics/"):
+    for img_path in os.listdir("extract/pics/"):
         name = img_path.split('.')[0]
         print("-------->", name)
-        img = cv2.imread("pics/" + img_path)
+        img = cv2.imread("extract/pics/" + img_path)
         save_fea.save(name, img, dict_save)
     
     json_object = json.dumps(dict_save, indent=4, ensure_ascii=False)
-    with open("features_arcface.json", "w",  encoding='utf8') as outfile:
+    output_path = os.environ.get("OUTPUT_PATH", "extract/features_arcface.json")
+    with open(output_path, "w",  encoding='utf8') as outfile:
         outfile.write(json_object)
+    print(f"Saved features to: {output_path}")

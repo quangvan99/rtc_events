@@ -54,6 +54,10 @@ RUN pip3 install --no-cache-dir \
     PyGObject \
     https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.11/pyds-1.1.11-py3-none-linux_x86_64.whl
 
+# Install additional requirements
+COPY scripts/requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
 # Build custom gst-nvinfer plugin
 COPY models/gst-nvinfer_7_0_cuda /tmp/gst-nvinfer
 RUN cd /tmp/gst-nvinfer && bash make.sh && rm -rf /tmp/gst-nvinfer

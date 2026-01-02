@@ -318,19 +318,8 @@
 
         const silentStreamPool = new SilentStreamPool(1);
 
-        // Face data cache - preloaded for future avatar/metadata display
+        // Face data cache - populated via DataChannel from stream
         let faceDataCache = {};
-
-        async function preloadFaceData() {
-            try {
-                const response = await fetch('/extract/features_arcface.json');
-                faceDataCache = await response.json();
-                console.log(`Loaded ${Object.keys(faceDataCache).length} faces`);
-            } catch (e) {
-                // Non-blocking - sidebar works without preloaded data
-                console.warn('Could not load face data:', e);
-            }
-        }
 
         const MAX_RECOGNITION_ITEMS = 50;
 
@@ -360,7 +349,11 @@
         function handleFaceEvent(event) {
             try {
                 const data = JSON.parse(event.data);
-                if (data.type === 'face_detected' && data.name && data.timestamp) {
+                if (data.type === 'face_data' && data.faces) {
+                    // Receive avatar data from stream
+                    faceDataCache = data.faces;
+                    console.log(`Loaded ${Object.keys(faceDataCache).length} faces via DataChannel`);
+                } else if (data.type === 'face_detected' && data.name && data.timestamp) {
                     addRecognitionItem(data.name, data.timestamp);
                 }
             } catch (e) {
@@ -463,16 +456,18 @@
             
             createPeerConnection() {
                 this.peer_connection = new RTCPeerConnection(rtc_configuration);
-                
-                this.data_channel = this.peer_connection.createDataChannel('data');
-                this.data_channel.onopen = () => {
-                    this.setStatus('connected');
-                    console.log('DataChannel open');
+
+                // Receive DataChannel from offerer (stream_face.py creates it)
+                this.peer_connection.ondatachannel = (event) => {
+                    this.data_channel = event.channel;
+                    this.data_channel.onopen = () => {
+                        console.log('DataChannel open');
+                    };
+                    this.data_channel.onmessage = handleFaceEvent;
+                    this.data_channel.onerror = (e) => console.error('DC error:', e);
+                    this.data_channel.onclose = () => console.log('DataChannel closed');
                 };
-                this.data_channel.onmessage = handleFaceEvent;
-                this.data_channel.onerror = (e) => console.error('DC error:', e);
-                this.data_channel.onclose = () => console.log('DataChannel closed');
-                
+
                 this.peer_connection.ontrack = (event) => {
                     const [stream] = event.streams;
                     this.setVideoStream(stream);
@@ -593,7 +588,6 @@
         }
         
         async function setupVideos() {
-            await preloadFaceData();
             await silentStreamPool.init();
 
             video_instances = [];
