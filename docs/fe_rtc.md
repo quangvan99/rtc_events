@@ -1,26 +1,10 @@
 # Frontend WebRTC - Face Recognition Display
 
-## Brainstorm: Hiển thị thông tin người nhận diện
-
-### Yêu cầu
-
-1. **Layout:** Stream 70% trái | Sidebar 30% phải
-2. **Sidebar hiển thị:** Tên, avatar (base64), thời gian xuất hiện
-3. **Data source:** `features_arcface.json` cho avatar/tên
+## Status: Phase 02 Complete (2026-01-02)
 
 ---
 
-## Phân tích
-
-### Dữ liệu
-
-| Data | Source | Type |
-|------|--------|------|
-| Avatar, Tên | `features_arcface.json` | Static (preload) |
-| Thời gian xuất hiện | `stream_face.py` | Realtime via DataChannel |
-| Ai đang xuất hiện | `stream_face.py` | Realtime via DataChannel |
-
-### Kiến trúc đề xuất
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -28,75 +12,66 @@
 ├─────────────────────────────┬───────────────────────────────┤
 │                             │  Sidebar (30%)                │
 │   Video Stream (70%)        │ ┌─────────────────────────┐  │
-│                             │ │ 👤 Quang - 16:35:22     │  │
-│   [WebRTC Video]            │ │ 👤 Minh  - 16:34:15     │  │
-│                             │ │ 👤 Hùng  - 16:33:01     │  │
+│   CSS Grid: 7fr 3fr         │ │ Name - 16:35:22         │  │
+│                             │ │ Name - 16:34:15         │  │
+│   [WebRTC Video]            │ │ Name - 16:33:01         │  │
 │                             │ └─────────────────────────┘  │
-│                             │                               │
+│                             │  Max 50 items, LIFO order    │
 └─────────────────────────────┴───────────────────────────────┘
                     ▲                         ▲
-                    │ Video                   │ JSON via DataChannel
-                    │                         │ {name: "Quang", time: "16:35:22"}
+                    │ Video Track             │ DataChannel JSON
+                    │                         │ {type, name, timestamp}
                     └─────────────────────────┘
                                   │
                     ┌─────────────┴─────────┐
                     │   stream_face.py      │
-                    │    (recognition)      │
                     └───────────────────────┘
 ```
 
 ---
 
-## Phương án so sánh
+## Implementation Summary
 
-| Aspect | **A: DataChannel JSON** | **B: WebSocket riêng** | **C: Overlay trên video** |
-|--------|------------------------|------------------------|--------------------------|
-| Complexity | Thấp (có sẵn DC) | Cao (thêm WS) | Trung bình |
-| Realtime | ✅ | ✅ | ✅ |
-| Tách biệt | ✅ Sidebar riêng | ✅ | ❌ Dính video |
-| Maintainability | Tốt | Phức tạp | OK |
-| **Recommend** | ⭐⭐⭐ | ⭐ | ⭐⭐ |
+### Layout (CSS Grid)
+- Main: `grid-template-columns: 7fr 3fr`
+- Mobile (<768px): stacked, 60vh/40vh split
+- Viewport meta + title tag added
 
----
+### Sidebar
+- Header: "Face Recognition" (dark bg)
+- List: `#recognition-list` ul, scrollable
+- Item: `.recognition-item` with name + timestamp
+- Limit: 50 items max, oldest removed
 
-## Phương án chọn: A - DataChannel JSON
+### Functions Added
 
-### Lý do
+| Function | Purpose |
+|----------|---------|
+| `preloadFaceData()` | Fetch `/extract/features_arcface.json` |
+| `escapeHtml(text)` | XSS prevention |
+| `addRecognitionItem(name, ts)` | Prepend item, trim overflow |
+| `handleFaceEvent(event)` | Parse DC message, call addRecognitionItem |
 
-- DataChannel đã được tạo sẵn (`createDataChannel('data')`)
-- Không cần thêm kết nối mới
-- Đơn giản, tuân thủ KISS principle
-
-### Data Flow
-
-1. `stream_face.py` detect face → gửi JSON qua DataChannel:
-   ```json
-   {"type": "face_detected", "name": "Quang", "timestamp": "16:35:22"}
-   ```
-2. `view.html` nhận message, tra cứu avatar từ `features_arcface.json` (preload)
-3. Cập nhật sidebar
-
-### Cần implement
-
-| File | Thay đổi |
-|------|----------|
-| `stream_face.py` | Gửi face detection data qua DataChannel |
-| `view.html` | Layout 70/30, preload JSON, xử lý DC message, render sidebar |
+### DataChannel Integration
+- Created in `createPeerConnection()`
+- `onmessage` -> `handleFaceEvent`
+- Expected message format:
+  ```json
+  {"type": "face_detected", "name": "...", "timestamp": "..."}
+  ```
 
 ---
 
-## Trade-offs
+## Data Sources
 
-| Pro | Con |
-|-----|-----|
-| Tận dụng DC có sẵn | Cần sửa cả Python & JS |
-| Realtime performance | features_arcface.json cần accessible từ browser |
-| Đơn giản hóa | Cần CORS/serve static file |
+| Data | Source | Notes |
+|------|--------|-------|
+| Face metadata | `/extract/features_arcface.json` | Preloaded, non-blocking |
+| Recognition events | DataChannel | Realtime from stream_face.py |
 
 ---
 
-## Câu hỏi mở
+## Pending (Future)
 
-1. Lịch sử hay chỉ realtime?
-2. `features_arcface.json` serve như thế nào? (cùng folder với view.html?)
-3. Giới hạn số người hiển thị trong sidebar?
+- [ ] Avatar display (base64 from features_arcface.json)
+- [ ] stream_face.py: send face events via DataChannel

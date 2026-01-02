@@ -2,14 +2,17 @@
 <html>
 <head>
     <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition Stream</title>
     <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .error { color: red; }
         
         .video-grid {
-            padding: 20px;
-            max-width: 1920px;
-            margin: 0 auto;
+            padding: 0;
+            max-width: none;
+            margin: 0;
+            height: 100%;
         }
         
         .video-item {
@@ -153,32 +156,110 @@
         .video-container:fullscreen {
             background: #000;
         }
-        
+
         .video-container:fullscreen video {
             height: 100vh;
             object-fit: contain;
+        }
+
+        /* Main layout - 70/30 split */
+        .main-container {
+            display: grid;
+            grid-template-columns: 7fr 3fr;
+            height: 100vh;
+            gap: 0;
+        }
+
+        .video-panel {
+            overflow: hidden;
+            background: #000;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: #f8f9fa;
+            border-left: 1px solid #dee2e6;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-header {
+            padding: 15px;
+            background: #343a40;
+            color: white;
+            font-weight: bold;
+        }
+
+        #recognition-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+            margin: 0;
+            list-style: none;
+        }
+
+        .recognition-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            border-bottom: 1px solid #e9ecef;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .recognition-item .name {
+            font-weight: 500;
+            flex: 1;
+        }
+
+        .recognition-item .time {
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        /* Responsive - stack on mobile */
+        @media (max-width: 768px) {
+            .main-container {
+                grid-template-columns: 1fr;
+                grid-template-rows: 60vh 40vh;
+            }
+            .sidebar {
+                border-left: none;
+                border-top: 1px solid #dee2e6;
+            }
         }
     </style>
 </head>
 
 <body>
-    <div class="container-fluid">
-        <h1 class="text-center mb-4">Single Video Conference</h1>
-        
-        <!-- Video Grid -->
-        <div id="video-grid" class="video-grid">
-            <div class="video-item" id="video-1">
-                <div class="video-container">
-                    <div class="video-number">1</div>
-                    <div class="status-badge status-waiting">waiting</div>
-                    <div class="video-placeholder">
-                        <div>
-                            <strong>Video 1</strong><br>
-                            <small>Waiting for connection...</small>
+    <div class="main-container">
+        <!-- Video Panel -->
+        <div class="video-panel">
+            <div id="video-grid" class="video-grid">
+                <div class="video-item" id="video-1">
+                    <div class="video-container">
+                        <div class="video-number">1</div>
+                        <div class="status-badge status-waiting">waiting</div>
+                        <div class="video-placeholder">
+                            <div>
+                                <strong>Video 1</strong><br>
+                                <small>Waiting for connection...</small>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">Face Recognition</div>
+            <ul id="recognition-list"></ul>
         </div>
     </div>
 
@@ -237,7 +318,57 @@
 
         const silentStreamPool = new SilentStreamPool(1);
 
-        
+        // Face data cache - preloaded for future avatar/metadata display
+        let faceDataCache = {};
+
+        async function preloadFaceData() {
+            try {
+                const response = await fetch('/extract/features_arcface.json');
+                faceDataCache = await response.json();
+                console.log(`Loaded ${Object.keys(faceDataCache).length} faces`);
+            } catch (e) {
+                // Non-blocking - sidebar works without preloaded data
+                console.warn('Could not load face data:', e);
+            }
+        }
+
+        const MAX_RECOGNITION_ITEMS = 50;
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function addRecognitionItem(name, timestamp) {
+            const list = document.getElementById('recognition-list');
+
+            const item = document.createElement('li');
+            item.className = 'recognition-item';
+            item.innerHTML = `
+                <span class="name">${escapeHtml(name)}</span>
+                <span class="time">${timestamp}</span>
+            `;
+
+            list.prepend(item);
+
+            while (list.children.length > MAX_RECOGNITION_ITEMS) {
+                list.lastElementChild.remove();
+            }
+        }
+
+        function handleFaceEvent(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'face_detected' && data.name && data.timestamp) {
+                    addRecognitionItem(data.name, data.timestamp);
+                }
+            } catch (e) {
+                console.warn('Invalid face event:', e);
+            }
+        }
+
+
         class VideoInstance {
             constructor(index) {
                 this.index = index;
@@ -336,7 +467,11 @@
                 this.data_channel = this.peer_connection.createDataChannel('data');
                 this.data_channel.onopen = () => {
                     this.setStatus('connected');
+                    console.log('DataChannel open');
                 };
+                this.data_channel.onmessage = handleFaceEvent;
+                this.data_channel.onerror = (e) => console.error('DC error:', e);
+                this.data_channel.onclose = () => console.log('DataChannel closed');
                 
                 this.peer_connection.ontrack = (event) => {
                     const [stream] = event.streams;
@@ -458,8 +593,9 @@
         }
         
         async function setupVideos() {
+            await preloadFaceData();
             await silentStreamPool.init();
-            
+
             video_instances = [];
             const instance = new VideoInstance(1);
             video_instances.push(instance);
