@@ -4,6 +4,8 @@ testcase/
 __pycache__/
 .claude/
 node_modules/
+plans/
+docs/
 
 # Files
 *.pem
