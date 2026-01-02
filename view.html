@@ -205,16 +205,38 @@
             padding: 12px 15px;
             border-bottom: 1px solid #e9ecef;
             animation: fadeIn 0.3s ease;
+            gap: 12px;
+        }
+
+        .recognition-item .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid #28a745;
+            flex-shrink: 0;
+        }
+
+        .recognition-item .info {
+            flex: 1;
+            min-width: 0;
         }
 
         .recognition-item .name {
-            font-weight: 500;
-            flex: 1;
+            font-weight: 600;
+            font-size: 14px;
+            color: #212529;
+            display: block;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .recognition-item .time {
             font-size: 12px;
             color: #6c757d;
+            display: block;
+            margin-top: 2px;
         }
 
         @keyframes fadeIn {
@@ -332,11 +354,20 @@
         function addRecognitionItem(name, timestamp) {
             const list = document.getElementById('recognition-list');
 
+            // Get avatar from cache (base64 encoded)
+            const faceData = faceDataCache[name];
+            const avatarSrc = faceData && faceData.avatar
+                ? `data:image/jpeg;base64,${faceData.avatar}`
+                : 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%236c757d"><circle cx="12" cy="8" r="4"/><path d="M12 14c-6 0-8 3-8 6v2h16v-2c0-3-2-6-8-6z"/></svg>';
+
             const item = document.createElement('li');
             item.className = 'recognition-item';
             item.innerHTML = `
-                <span class="name">${escapeHtml(name)}</span>
-                <span class="time">${timestamp}</span>
+                <img class="avatar" src="${avatarSrc}" alt="${escapeHtml(name)}">
+                <div class="info">
+                    <span class="name">${escapeHtml(name)}</span>
+                    <span class="time">${timestamp}</span>
+                </div>
             `;
 
             list.prepend(item);
