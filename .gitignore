@@ -1,0 +1,13 @@
+# Folders
+models/
+testcase/
+__pycache__/
+.claude/
+
+# Files
+*.pem
+*.pyc
+*.pyo
+*.log
+.env
+.DS_Store

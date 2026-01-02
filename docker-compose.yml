@@ -1,0 +1,56 @@
+# Docker Compose v2 configuration for Face Recognition WebRTC Stream
+services:
+  face-stream:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: face-stream
+    restart: unless-stopped
+
+    # GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, compute, utility]
+
+    # Network configuration
+    network_mode: host
+
+    # Volume mounts for hot reload
+    volumes:
+      # Source code - hot reload
+      - ./signalling.py:/app/signalling.py:ro
+      - ./stream_face.py:/app/stream_face.py:ro
+      - ./view.html:/app/view.html:ro
+      - ./cert.pem:/app/cert.pem:ro
+      - ./key.pem:/app/key.pem:ro
+      # Models and test data (mount parent directories)
+      - ../models:/models:ro
+      - ../extract:/extract:ro
+      - ../testcase:/testcase:ro
+
+    # Environment variables
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - GST_DEBUG=${GST_DEBUG:-2}
+      - PYTHONUNBUFFERED=1
+      - DISPLAY=${DISPLAY:-:0}
+
+    # Default command (can be overridden)
+    command: ["python3", "signalling.py", "--port", "8555"]
+
+    # Interactive mode for debugging
+    stdin_open: true
+    tty: true
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8555/health" , "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

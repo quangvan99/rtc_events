@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8"/>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .error { color: red; }
+        
+        .video-grid {
+            padding: 20px;
+            max-width: 1920px;
+            margin: 0 auto;
+        }
+        
+        .video-item {
+            background: white;
+            border: 2px solid #dee2e6;
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        
+        .video-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        
+        .video-item.connected {
+            border-color: #28a745;
+            background: #f8fff9;
+        }
+        
+        .video-item.connecting {
+            border-color: #ffc107;
+            background: #fffdf5;
+        }
+        
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .video-container video {
+            width: 100%;
+            height: auto;
+            aspect-ratio: 16 / 9;
+            object-fit: contain;
+        }
+        
+        .video-placeholder {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 16px;
+            text-align: center;
+            flex-direction: column;
+        }
+        
+        .status-badge {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .status-waiting {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .status-connecting {
+            background: #ffc107;
+            color: #000;
+        }
+        
+        .status-connected {
+            background: #28a745;
+            color: white;
+        }
+        
+        .status-error {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .video-number {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        /* Nút unmute ở góc dưới trái */
+        .unmute-btn {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            cursor: pointer;
+            z-index: 10;
+            transition: background 0.3s;
+        }
+        
+        .unmute-btn:hover {
+            background: #28a745;
+        }
+        
+        .unmute-btn.muted {
+            background: #dc3545;
+        }
+        
+        /* Nút fullscreen ở góc dưới phải */
+        .fullscreen-btn {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            cursor: pointer;
+            z-index: 10;
+            transition: background 0.3s;
+        }
+        
+        .fullscreen-btn:hover {
+            background: #007bff;
+        }
+        
+        /* Fullscreen mode */
+        .video-container:fullscreen {
+            background: #000;
+        }
+        
+        .video-container:fullscreen video {
+            height: 100vh;
+            object-fit: contain;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container-fluid">
+        <h1 class="text-center mb-4">Single Video Conference</h1>
+        
+        <!-- Video Grid -->
+        <div id="video-grid" class="video-grid">
+            <div class="video-item" id="video-1">
+                <div class="video-container">
+                    <div class="video-number">1</div>
+                    <div class="status-badge status-waiting">waiting</div>
+                    <div class="video-placeholder">
+                        <div>
+                            <strong>Video 1</strong><br>
+                            <small>Waiting for connection...</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+    <script>
+        // Configuration
+        var ws_server = "192.168.6.16";
+        var ws_port = "8443";
+        var rtc_configuration = {iceServers: [{urls: "stun:stun.l.google.com:19302"}]};
+        
+        // Global variables
+        var video_instances = [];
+        var video_count = 1;
+
+        class SilentStreamPool {
+            constructor(poolSize = 10) {
+                this.poolSize = poolSize;
+                this.audioContext = null;
+                this.streamPool = [];
+                this.currentIndex = 0;
+                this.initialized = false;
+            }
+
+            async init() {
+                if (this.initialized) return;
+                
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const destination = this.audioContext.createMediaStreamDestination();
+                
+                for (let i = 0; i < this.poolSize; i++) {
+                    const stream = destination.stream.clone();
+                    this.streamPool.push(stream);
+                }
+                
+                this.initialized = true;
+            }
+
+            getNextStream() {
+                if (!this.initialized) {
+                    throw new Error('Pool chưa được khởi tạo!');
+                }
+                
+                const stream = this.streamPool[this.currentIndex];
+                this.currentIndex = (this.currentIndex + 1) % this.poolSize;
+                return stream.clone();
+            }
+
+            async getSilentStream() {
+                if (!this.initialized) {
+                    await this.init();
+                }
+                return this.getNextStream();
+            }
+        }
+
+        const silentStreamPool = new SilentStreamPool(1);
+
+        
+        class VideoInstance {
+            constructor(index) {
+                this.index = index;
+                this.our_id = index.toString();
+                this.peer_connection = null;
+                this.data_channel = null;
+                this.ws_conn = null;
+                this.local_stream = null;
+                this.status = 'waiting';
+                this.connect_attempts = 0;
+                
+                this.initializeWebSocket();
+            }
+            
+            initializeWebSocket() {
+                this.connect_attempts++;
+                if (this.connect_attempts > 3) {
+                    this.setStatus('error');
+                    return;
+                }
+                
+                const ws_url = `wss://${ws_server}:${ws_port}`;
+                this.ws_conn = new WebSocket(ws_url);
+                
+                this.ws_conn.onopen = () => {
+                    this.ws_conn.send(`HELLO ${this.our_id}`);
+                    this.setStatus('waiting');
+                    this.connect_attempts = 0;
+                };
+                
+                this.ws_conn.onmessage = (event) => {
+                    this.handleServerMessage(event.data);
+                };
+                
+                this.ws_conn.onclose = () => {
+                    this.setStatus('error');
+                    setTimeout(() => this.initializeWebSocket(), 2000);
+                };
+                
+                this.ws_conn.onerror = () => {
+                    this.setStatus('error');
+                    setTimeout(() => this.initializeWebSocket(), 3000);
+                };
+            }
+            
+            handleServerMessage(data) {
+                if (data === "HELLO") {
+                    this.setStatus('waiting');
+                    return;
+                }
+                
+                if (data.startsWith("ERROR")) {
+                    this.setStatus('error');
+                    return;
+                }
+                
+                if (data === "SESSION_OK") {
+                    this.setStatus('connecting');
+                    this.createPeerConnection();
+                    return;
+                }
+                
+                try {
+                    const msg = JSON.parse(data);
+                    this.handleWebRTCMessage(msg);
+                } catch (e) {
+                    console.log(`Video ${this.index} non-JSON message:`, data);
+                }
+            }
+            
+            handleWebRTCMessage(msg) {
+                if (!this.peer_connection) {
+                    this.createPeerConnection();
+                }
+                
+                if (msg.sdp) {
+                    this.handleSDP(msg.sdp);
+                } else if (msg.ice) {
+                    this.peer_connection.addIceCandidate(new RTCIceCandidate(msg.ice));
+                }
+            }
+            
+            async handleSDP(sdp) {
+                await this.peer_connection.setRemoteDescription(sdp);
+                
+                if (sdp.type === 'offer') {
+                    const answer = await this.peer_connection.createAnswer();
+                    await this.peer_connection.setLocalDescription(answer);
+                    this.ws_conn.send(JSON.stringify({'sdp': answer}));
+                }
+            }
+            
+            createPeerConnection() {
+                this.peer_connection = new RTCPeerConnection(rtc_configuration);
+                
+                this.data_channel = this.peer_connection.createDataChannel('data');
+                this.data_channel.onopen = () => {
+                    this.setStatus('connected');
+                };
+                
+                this.peer_connection.ontrack = (event) => {
+                    const [stream] = event.streams;
+                    this.setVideoStream(stream);
+                    this.setStatus('connected');
+                };
+                
+                this.peer_connection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        this.ws_conn.send(JSON.stringify({'ice': event.candidate}));
+                    }
+                };
+                
+                this.peer_connection.oniceconnectionstatechange = () => {
+                    const state = this.peer_connection.iceConnectionState;
+                    
+                    switch(state) {
+                        case 'connected':
+                        case 'completed':
+                            this.setStatus('connected');
+                            break;
+                        case 'disconnected':
+                        case 'failed':
+                            this.setStatus('error');
+                            break;
+                        case 'connecting':
+                        case 'checking':
+                            this.setStatus('connecting');
+                            break;
+                    }
+                };
+                
+                this.getLocalStream().then(stream => {
+                    if (stream) {
+                        stream.getTracks().forEach(track => {
+                            this.peer_connection.addTrack(track, stream);
+                        });
+                    }
+                });
+            }
+            
+            async getLocalStream() {
+                try {
+                    this.local_stream = await silentStreamPool.getSilentStream();
+                    return this.local_stream;
+                } catch (e) {
+                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    const destination = audioContext.createMediaStreamDestination();
+                    this.local_stream = destination.stream;
+                    return this.local_stream;
+                }
+            }
+            
+            setVideoStream(stream) {
+                const videoContainer = document.querySelector(`#video-${this.index} .video-container`);
+                const placeholder = videoContainer.querySelector('.video-placeholder');
+                
+                if (placeholder) {
+                    placeholder.remove();
+                }
+                
+                let video = videoContainer.querySelector('video');
+                if (!video) {
+                    video = document.createElement('video');
+                    video.autoplay = true;
+                    video.playsinline = true;
+                    video.muted = true;
+                    videoContainer.appendChild(video);
+                    
+                    // Nút unmute ở góc dưới trái
+                    const unmuteBtn = document.createElement('button');
+                    unmuteBtn.className = 'unmute-btn muted';
+                    unmuteBtn.innerHTML = '🔇';
+                    unmuteBtn.onclick = function(e) {
+                        e.stopPropagation();
+                        video.muted = !video.muted;
+                        if (video.muted) {
+                            unmuteBtn.innerHTML = '🔇';
+                            unmuteBtn.classList.add('muted');
+                        } else {
+                            unmuteBtn.innerHTML = '🔊';
+                            unmuteBtn.classList.remove('muted');
+                        }
+                    };
+                    videoContainer.appendChild(unmuteBtn);
+                    
+                    // Nút fullscreen ở góc dưới phải
+                    const fullscreenBtn = document.createElement('button');
+                    fullscreenBtn.className = 'fullscreen-btn';
+                    fullscreenBtn.innerHTML = '⛶';
+                    fullscreenBtn.onclick = function(e) {
+                        e.stopPropagation();
+                        if (document.fullscreenElement) {
+                            document.exitFullscreen();
+                        } else {
+                            videoContainer.requestFullscreen();
+                        }
+                    };
+                    videoContainer.appendChild(fullscreenBtn);
+                }
+                
+                video.srcObject = stream;
+            }
+            
+            setStatus(status) {
+                this.status = status;
+                const statusBadge = document.querySelector(`#video-${this.index} .status-badge`);
+                const videoItem = document.getElementById(`video-${this.index}`);
+                
+                if (statusBadge) {
+                    statusBadge.className = `status-badge status-${status}`;
+                    statusBadge.textContent = status;
+                }
+                
+                if (videoItem) {
+                    videoItem.className = `video-item ${status}`;
+                }
+            }
+        }
+        
+        async function setupVideos() {
+            await silentStreamPool.init();
+            
+            video_instances = [];
+            const instance = new VideoInstance(1);
+            video_instances.push(instance);
+        }
+
+        
+        window.onload = function() {
+            setTimeout(async function() {
+                await setupVideos();
+            }, 100);
+        };
+    </script>
+</body>
+</html>
