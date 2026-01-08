@@ -1,0 +1,25 @@
+# Folders
+data/
+!data/.gitkeep
+.backup/
+testcase/
+__pycache__/
+.claude/
+node_modules/
+plans/
+docs/
+
+# Files
+*.pem
+*.pyc
+*.pyo
+*.log
+.env
+.DS_Store
+
+# Legacy locations (keep for safety)
+models/
+videos/
+features.json
+features.cache.npz
+mapping.csv

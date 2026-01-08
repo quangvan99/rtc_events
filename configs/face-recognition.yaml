@@ -1,0 +1,104 @@
+# Face Recognition Pipeline Config
+# Environment variables override defaults: INPUT_URI, OUTPUT_MODE, WS_URL
+
+# =============================================================================
+# Recognition Settings
+# =============================================================================
+recognition:
+    features_json: "${FEATURES_JSON:data/face/features.json}"
+    l2_threshold: 1.0 # Max L2 distance for valid match
+    min_streak: 3 # Consecutive matches to confirm identity
+    skip_reid: 3 # Skip SGIE for N frames after last inference
+    reid_interval: 30 # Re-identify confirmed faces (~1s at 30fps)
+    min_face_size: 50 # Skip SGIE for faces smaller than NxN pixels
+
+# =============================================================================
+# Pipeline Definition
+# =============================================================================
+pipeline:
+    name: face-recognition-pipeline
+
+    source:
+        type: uridecodebin
+        name: source
+        properties:
+            uri: "${INPUT_URI:rtsp://admin:MQ123456@192.168.6.92}"
+            #uri: "${INPUT_URI:file:///home/jetson/FACE/data/face/videos/change_id.mp4}"
+
+    muxer:
+        type: nvstreammux
+        name: streammux
+        properties:
+            width: 1920
+            height: 1080
+            batch-size: 1
+            batched-push-timeout: 40000
+            live-source: 1
+            attach-sys-ts: 1
+
+    elements:
+        - type: nvvideoconvert
+          properties:
+              compute-hw: 1
+
+        - type: queue
+          properties:
+              max-size-buffers: 3
+              leaky: 2
+
+        - type: capsfilter
+          caps: "video/x-raw(memory:NVMM),format=RGBA"
+
+        - type: nvinfer
+          name: pgie
+          config_file: "${PGIE_CONFIG:data/face/models/scrfd640/infer.txt}"
+
+        - type: nvtracker
+          name: tracker
+          config_file: "${TRACKER_CONFIG:data/face/models/NvDCF/config_tracker.txt}"
+          probes:
+              src: tracker_probe
+
+        - type: nvinfer
+          name: sgie
+          config_file: "${SGIE_CONFIG:data/face/models/arcface/infer.txt}"
+          probes:
+              src: sgie_probe
+
+        - type: queue
+          properties:
+              max-size-buffers: 3
+              leaky: 2
+
+        - type: nvdsosd
+          properties:
+              process-mode: 0
+              display-text: 1
+          probes:
+              src: fps_probe
+
+# =============================================================================
+# Sink Configuration
+# =============================================================================
+sink:
+    type: "${OUTPUT_MODE:fakesink}"
+
+    webrtc:
+        ws_url: "${WS_URL:ws://192.168.6.112:8555}"
+        peer_id: "1"
+        stun_server: "stun://stun.l.google.com:19302"
+
+    fakesink:
+        sync: false
+
+    filesink:
+        location: "${OUTPUT_FILE:output.mp4}"
+        codec: h264
+        bitrate: 4000000
+
+# =============================================================================
+# Signaling Server
+# =============================================================================
+signaling:
+    host: "${SIGNALING_HOST:0.0.0.0}"
+    port: "${SIGNALING_PORT:8555}"
