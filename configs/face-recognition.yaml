@@ -5,7 +5,7 @@
 # Recognition Settings
 # =============================================================================
 recognition:
-    features_json: "${FEATURES_JSON:data/face/features.json}"
+    features_json: "${FEATURES_JSON:/home/mq/disk2T/quangnv/face/data/face/features.json}"
     l2_threshold: 1.0 # Max L2 distance for valid match
     min_streak: 3 # Consecutive matches to confirm identity
     skip_reid: 3 # Skip SGIE for N frames after last inference
@@ -22,8 +22,8 @@ pipeline:
         type: uridecodebin
         name: source
         properties:
-            uri: "${INPUT_URI:rtsp://admin:MQ123456@192.168.6.92}"
-            #uri: "${INPUT_URI:file:///home/jetson/FACE/data/face/videos/change_id.mp4}"
+            # uri: "${INPUT_URI:rtsp://admin:MQ123456@192.168.6.92}"
+            uri: "${INPUT_URI:file:///home/mq/disk2T/quangnv/face/data/videos/change_id.mp4}"
 
     muxer:
         type: nvstreammux
@@ -84,9 +84,9 @@ sink:
     type: "${OUTPUT_MODE:fakesink}"
 
     webrtc:
-        ws_url: "${WS_URL:ws://192.168.6.112:8555}"
+        ws_url: "${WS_URL:ws://192.168.6.16:8555}"
         peer_id: "1"
-        stun_server: "stun://stun.l.google.com:19302"
+        stun_server: ""
 
     fakesink:
         sync: false

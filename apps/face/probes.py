@@ -1,7 +1,9 @@
-"""Face recognition probe callbacks"""
+"""Face recognition probe callbacks for multi-camera DeepStream pipeline"""
 
 import ctypes
 import time
+from typing import Optional
+
 import numpy as np
 import pyds
 import gi
@@ -21,15 +23,40 @@ SKIP_SGIE_COMPONENT_ID = 100
 
 
 class FaceProbes:
-    """Face recognition probe callbacks for DeepStream pipeline"""
+    """Face recognition probe callbacks for DeepStream pipeline
 
-    def __init__(self, config: dict, database: FaceDatabase,
-                 tracker_mgr: TrackerManager, sink: BaseSink):
+    Supports multi-camera mode with source_id-based tracker isolation.
+    """
+
+    def __init__(
+        self,
+        config: dict,
+        database: FaceDatabase,
+        tracker_mgr: TrackerManager,
+        sink: BaseSink,
+        source_mapper=None
+    ):
+        """
+        Initialize FaceProbes
+
+        Args:
+            config: Recognition config dict
+            database: FaceDatabase instance
+            tracker_mgr: TrackerManager instance
+            sink: Output sink adapter
+            source_mapper: Optional SourceIDMapper for camera_id lookup
+        """
         self.config = config
         self.db = database
         self.trackers = tracker_mgr
         self.display = FaceDisplay()
-        self.events = FaceEventEmitter(sink, database.avatars, database)
+        self.source_mapper = source_mapper
+
+        # Pass mapper to events for camera_id lookup
+        self.events = FaceEventEmitter(
+            sink, database.avatars, database,
+            source_mapper=source_mapper
+        )
 
         # FPS tracking
         self._fps_start = time.time()
@@ -59,10 +86,19 @@ class FaceProbes:
                 break
         return None
 
-    def _process_face(self, obj_meta, frame: int) -> tuple[str, str, float]:
-        """Process face and return (name, state, score) for display"""
+    def _process_face(self, source_id: int, obj_meta, frame: int) -> tuple[str, str, float]:
+        """Process face and return (name, state, score) for display
+
+        Args:
+            source_id: Camera source ID from frame_meta
+            obj_meta: NvDsObjectMeta for this face
+            frame: Frame number
+
+        Returns:
+            Tuple of (name, state, score)
+        """
         oid = obj_meta.object_id
-        trk = self.trackers.get_or_create(oid, frame)
+        trk = self.trackers.get_or_create(source_id, oid, frame)
         trk.age = 0  # Face visible
 
         # Process embedding if SGIE ran
@@ -73,7 +109,8 @@ class FaceProbes:
             if trk.add_match(person, dist):
                 name = self.db.names[person]
                 if trk.confirm(name):
-                    self.events.send_detection(oid, name)
+                    # Include source_id in event
+                    self.events.send_detection(source_id, oid, name)
 
         # Return display info
         if trk.label:
@@ -100,6 +137,7 @@ class FaceProbes:
         while l_frame:
             try:
                 frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+                source_id = frame_meta.source_id  # Extract source_id
                 frame = frame_meta.frame_num
 
                 l_obj = frame_meta.obj_meta_list
@@ -111,7 +149,8 @@ class FaceProbes:
                         # Skip: small face OR tracker says skip
                         skip = rect.width < min_face or rect.height < min_face
                         if not skip:
-                            trk = self.trackers.get(obj.object_id)
+                            # Pass source_id to get()
+                            trk = self.trackers.get(source_id, obj.object_id)
                             skip = trk and not trk.should_run_sgie(frame)
 
                         if skip:
@@ -140,11 +179,16 @@ class FaceProbes:
         while l_frame:
             try:
                 frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+                source_id = frame_meta.source_id  # Extract source_id
+
                 l_obj = frame_meta.obj_meta_list
                 while l_obj:
                     try:
                         obj = pyds.NvDsObjectMeta.cast(l_obj.data)
-                        name, state, score = self._process_face(obj, frame_meta.frame_num)
+                        # Pass source_id to _process_face
+                        name, state, score = self._process_face(
+                            source_id, obj, frame_meta.frame_num
+                        )
                         self.display.update(obj, name, score, state)
                         l_obj = l_obj.next
                     except StopIteration:
@@ -171,7 +215,8 @@ class FaceProbes:
             print(f"[STATS] total={total}, confirmed={confirmed}, pending={pending}")
             self._stats_last = now
 
-        # Cleanup stale trackers
-        self.events.cleanup(self.trackers.cleanup())
+        # Cleanup stale trackers - returns list of (source_id, oid)
+        removed = self.trackers.cleanup()
+        self.events.cleanup(removed)
 
         return Gst.PadProbeReturn.OK

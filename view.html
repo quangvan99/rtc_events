@@ -1,966 +1,693 @@
 <!doctype html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Face Recognition Stream</title>
-    <link
-      href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
-      rel="stylesheet"
-    />
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Face Recognition Stream</title>
+        <link
+            href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+            rel="stylesheet"
+        />
+        <style>
+            .error {
+                color: red;
+            }
 
-    <style>
-      :root{
-        --bg: #f6f7fb;
-        --card: #ffffff;
-        --border: #e6e9f2;
-        --text: #101828;
-        --muted: #667085;
+            .video-grid {
+                padding: 0;
+                max-width: none;
+                margin: 0;
+                height: 100%;
+            }
 
-        --primary: #2563eb;
-        --success: #22c55e;
+            .video-item {
+                background: white;
+                border: 2px solid #dee2e6;
+                border-radius: 15px;
+                padding: 15px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+                transition: all 0.3s ease;
+            }
 
-        --vip-bg: #fffaf1;
-        --vip-border: #ffd69a;
+            .video-item:hover {
+                transform: translateY(-5px);
+                box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+            }
 
-        --shadow: 0 10px 30px rgba(16,24,40,0.08);
-        --shadow-2: 0 6px 18px rgba(16,24,40,0.08);
-        --radius: 18px;
-      }
+            .video-item.connected {
+                border-color: #28a745;
+                background: #f8fff9;
+            }
 
-      * { box-sizing: border-box; }
-      body{
-        margin:0;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        background: var(--bg);
-        color: var(--text);
-        height: 100vh;
-        overflow: hidden;
-      }
+            .video-item.connecting {
+                border-color: #ffc107;
+                background: #fffdf5;
+            }
 
-      .main-container{
-        display: grid;
-        grid-template-columns: 7fr 3fr;
-        height: 100vh;
-        gap: 18px;
-        padding: 18px;
-      }
+            .video-container {
+                position: relative;
+                background: #000;
+                border-radius: 10px;
+                overflow: hidden;
+            }
 
-      .video-panel, .sidebar{
-        height: calc(100vh - 36px);
-        overflow: hidden;
-      }
+            .video-container video {
+                width: 100%;
+                height: auto;
+                aspect-ratio: 16 / 9;
+                object-fit: contain;
+            }
 
-      /* ===== Left card (Video) ===== */
-      .video-card{
-        height: 100%;
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow);
-        overflow: hidden;
-        display:flex;
-        flex-direction: column;
-      }
+            .video-placeholder {
+                width: 100%;
+                aspect-ratio: 16 / 9;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                color: white;
+                font-size: 16px;
+                text-align: center;
+                flex-direction: column;
+            }
 
-      .video-header{
-        padding: 14px 16px;
-        display:flex;
-        align-items:center;
-        justify-content: space-between;
-        border-bottom: 1px solid var(--border);
-        background: #fff;
-      }
+            .status-badge {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                padding: 4px 8px;
+                border-radius: 12px;
+                font-size: 12px;
+                font-weight: bold;
+                text-transform: uppercase;
+            }
 
-      .video-title{
-        display:flex;
-        align-items:center;
-        gap: 10px;
-        font-weight: 800;
-        font-size: 18px;
-      }
+            .status-waiting {
+                background: #6c757d;
+                color: white;
+            }
 
-      .video-title .icon{
-        width: 28px; height: 28px;
-        display:flex; align-items:center; justify-content:center;
-        border-radius: 10px;
-        background: #eef2ff;
-        color: var(--primary);
-        font-size: 16px;
-      }
+            .status-connecting {
+                background: #ffc107;
+                color: #000;
+            }
 
-      .live-badge{
-        display:flex;
-        align-items:center;
-        gap: 8px;
-        padding: 6px 12px;
-        border-radius: 999px;
-        border: 1px solid #c7f9d6;
-        background: #effdf4;
-        color: #137a3a;
-        font-weight: 800;
-        font-size: 13px;
-      }
-      .live-dot{
-        width: 8px; height: 8px;
-        border-radius: 50%;
-        background: var(--success);
-        box-shadow: 0 0 0 4px rgba(34,197,94,0.15);
-      }
+            .status-connected {
+                background: #28a745;
+                color: white;
+            }
 
-      .video-grid{
-        padding: 0;
-        margin: 0;
-        flex: 1;
-        background: #fff;
-        overflow: hidden;
-      }
+            .status-error {
+                background: #dc3545;
+                color: white;
+            }
 
-      .video-item{
-        height: 100%;
-        padding: 14px;
-        background: #fff;
-      }
+            .video-number {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                background: rgba(0, 0, 0, 0.7);
+                color: white;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
 
-      .video-container{
-        position: relative;
-        height: 100%;
-        background: #000;
-        border-radius: 22px;
-        overflow: hidden;
-        box-shadow: var(--shadow-2);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-      }
+            /* Nút unmute ở góc dưới trái */
+            .unmute-btn {
+                position: absolute;
+                bottom: 10px;
+                left: 10px;
+                background: rgba(0, 0, 0, 0.7);
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 20px;
+                font-size: 14px;
+                cursor: pointer;
+                z-index: 10;
+                transition: background 0.3s;
+            }
 
-      .video-container video{
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        background:#000;
-      }
+            .unmute-btn:hover {
+                background: #28a745;
+            }
 
-      .video-placeholder{
-        width: 100%;
-        height: 100%;
-        display:flex;
-        justify-content:center;
-        align-items:center;
-        color:#fff;
-        text-align:center;
-        flex-direction: column;
-        background: #000;
-      }
+            .unmute-btn.muted {
+                background: #dc3545;
+            }
 
-      .video-number{
-        position:absolute;
-        top: 14px;
-        left: 14px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        background: rgba(0,0,0,0.55);
-        color:#fff;
-        font-weight: 900;
-        font-size: 13px;
-        border: 1px solid rgba(255,255,255,0.18);
-        backdrop-filter: blur(6px);
-        z-index: 6;
-      }
+            /* Nút fullscreen ở góc dưới phải */
+            .fullscreen-btn {
+                position: absolute;
+                bottom: 10px;
+                right: 10px;
+                background: rgba(0, 0, 0, 0.7);
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 20px;
+                font-size: 14px;
+                cursor: pointer;
+                z-index: 10;
+                transition: background 0.3s;
+            }
 
-      .status-badge{
-        position:absolute;
-        top: 14px;
-        right: 14px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 900;
-        text-transform: uppercase;
-        border: 1px solid rgba(255,255,255,0.18);
-        backdrop-filter: blur(6px);
-        z-index: 6;
-      }
+            .fullscreen-btn:hover {
+                background: #007bff;
+            }
 
-      .status-waiting{ background: rgba(148,163,184,0.25); color:#fff; }
-      .status-connecting{ background: rgba(245,158,11,0.25); color:#fff; }
-      .status-connected{ background: rgba(34,197,94,0.25); color:#fff; }
-      .status-error{ background: rgba(239,68,68,0.25); color:#fff; }
+            /* Fullscreen mode */
+            .video-container:fullscreen {
+                background: #000;
+            }
 
-      .scan-pill{
-        position:absolute;
-        left: 0; right: 0;
-        bottom: 16px;
-        margin: 0 auto;
-        width: fit-content;
-        padding: 8px 14px;
-        border-radius: 999px;
-        background: rgba(17,24,39,0.55);
-        color: #fff;
-        display:flex;
-        align-items:center;
-        gap: 10px;
-        font-weight: 700;
-        font-size: 13px;
-        border: 1px solid rgba(255,255,255,0.18);
-        backdrop-filter: blur(6px);
-        z-index: 6;
-      }
-      .scan-pill .user-icon{
-        width: 20px; height: 20px;
-        display:flex; align-items:center; justify-content:center;
-        border-radius: 8px;
-        background: rgba(34,197,94,0.20);
-        color: #7CFFAA;
-        font-size: 14px;
-        line-height: 1;
-      }
+            .video-container:fullscreen video {
+                height: 100vh;
+                object-fit: contain;
+            }
 
-      .unmute-btn, .fullscreen-btn{
-        position:absolute;
-        bottom: 12px;
-        background: rgba(0,0,0,0.45);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.18);
-        padding: 8px 12px;
-        border-radius: 999px;
-        font-size: 14px;
-        cursor: pointer;
-        z-index: 10;
-        backdrop-filter: blur(6px);
-        transition: transform .15s ease, background .2s ease;
-      }
-      .unmute-btn:hover, .fullscreen-btn:hover{ transform: translateY(-1px); background: rgba(0,0,0,0.60); }
-      .unmute-btn{ left: 12px; }
-      .fullscreen-btn{ right: 12px; }
-      .unmute-btn.muted{ background: rgba(239,68,68,0.45); }
+            /* Main layout - 70/30 split */
+            .main-container {
+                display: grid;
+                grid-template-columns: 7fr 3fr;
+                height: 100vh;
+                gap: 0;
+            }
 
-      .video-container:fullscreen{ background:#000; }
-      .video-container:fullscreen video{ height: 100vh; object-fit: contain; }
+            .video-panel {
+                overflow: hidden;
+                background: #000;
+            }
 
-      /* ===== Right panel ===== */
-      .sidebar{
-        background: transparent;
-        display:flex;
-        flex-direction: column;
-        overflow: hidden;
-      }
+            /* Sidebar */
+            .sidebar {
+                background: #f8f9fa;
+                border-left: 1px solid #dee2e6;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+            }
 
-      .welcome{
-        height: 100%;
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow);
-        overflow: hidden;
-        display:flex;
-        flex-direction: column;
-      }
+            .sidebar-header {
+                padding: 15px;
+                background: #343a40;
+                color: white;
+                font-weight: bold;
+            }
 
-      .welcome-header{
-        padding: 16px 16px 12px 16px;
-        display:flex;
-        align-items:center;
-        gap: 10px;
-        border-bottom: 1px solid var(--border);
-        background: #fff;
-      }
-      .welcome-header .star{
-        width: 34px; height: 34px;
-        border-radius: 12px;
-        display:flex; align-items:center; justify-content:center;
-        background: #fff7ed;
-        border: 1px solid #fed7aa;
-        color: #f97316;
-        font-size: 18px;
-      }
-      .welcome-header .text{
-        font-weight: 900;
-        letter-spacing: .5px;
-        color: #f04438;
-        font-size: 18px;
-        line-height: 1.2;
-      }
+            #recognition-list {
+                flex: 1;
+                overflow-y: auto;
+                padding: 0;
+                margin: 0;
+                list-style: none;
+            }
 
-      #recognition-list{
-        flex: 1;
-        overflow-y: auto;
-        padding: 14px;
-        margin: 0;
-        list-style: none;
-        background: #fff;
-      }
+            .recognition-item {
+                display: flex;
+                align-items: center;
+                padding: 12px 15px;
+                border-bottom: 1px solid #e9ecef;
+                animation: fadeIn 0.3s ease;
+                gap: 12px;
+            }
 
-      /* item card */
-      .recognition-item{
-        position: relative;
-        display:flex;
-        align-items: flex-start;
-        gap: 14px;
-        padding: 14px 14px;
-        border-radius: 16px;
-        border: 1px solid var(--border);
-        background: #fff;
-        margin-bottom: 12px;
-        box-shadow: 0 2px 10px rgba(16,24,40,0.05);
-        animation: fadeIn 0.18s ease;
-      }
+            .recognition-item .avatar {
+                width: 48px;
+                height: 48px;
+                border-radius: 50%;
+                object-fit: cover;
+                border: 2px solid #28a745;
+                flex-shrink: 0;
+            }
 
-      .recognition-item.vip{
-        background: var(--vip-bg);
-        border-color: var(--vip-border);
-      }
-      .recognition-item.vip::before{
-        content:"";
-        position:absolute;
-        left: 0;
-        top: 10px;
-        bottom: 10px;
-        width: 5px;
-        border-radius: 999px;
-        background: var(--primary);
-      }
+            .recognition-item .info {
+                flex: 1;
+                min-width: 0;
+            }
 
-      .recognition-item .avatar{
-        width: 60px;
-        height: 60px;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 3px solid #d1fadf;
-        flex-shrink: 0;
-        background: #f2f4f7;
-      }
+            .recognition-item .name {
+                font-weight: 600;
+                font-size: 14px;
+                color: #212529;
+                display: block;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
 
-      .recognition-item .info{
-        flex: 1;
-        min-width: 0;
-        padding-top: 2px;
-      }
+            .recognition-item .time {
+                font-size: 12px;
+                color: #6c757d;
+                display: block;
+                margin-top: 2px;
+            }
 
-      .recognition-item .name-row{
-        display:flex;
-        align-items:flex-start;
-        gap: 8px;
-        margin-bottom: 8px;
-      }
+            @keyframes fadeIn {
+                from {
+                    opacity: 0;
+                    transform: translateX(20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
 
-      .recognition-item .name{
-        font-weight: 600;        /* 👈 vừa phải, không gắt */
-        font-size: 18px;         /* 👈 vẫn to, rõ */
-        color: #111827;
-        display:block;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        line-height: 1.25;
-      }
+            /* Responsive - stack on mobile */
+            @media (max-width: 768px) {
+                .main-container {
+                    grid-template-columns: 1fr;
+                    grid-template-rows: 60vh 40vh;
+                }
+                .sidebar {
+                    border-left: none;
+                    border-top: 1px solid #dee2e6;
+                }
+            }
+        </style>
+    </head>
 
-
-      .recognition-item .badge-vip{
-        font-size: 11px;
-        font-weight: 900;
-        padding: 2px 8px;
-        border-radius: 999px;
-        background: #ffedd5;
-        border: 1px solid #fed7aa;
-        color: #c2410c;
-        flex-shrink: 0;
-        margin-top: 4px;
-      }
-
-      /* company + title */
-      .recognition-item .sub{
-        margin-top: 4px;
-        display:flex;
-        flex-direction: column;
-        gap: 6px;
-        color: #475467;
-        font-size: 13px;
-        line-height: 1.25;
-      }
-      .recognition-item .sub-line{
-        display:flex;
-        align-items:flex-start;
-        gap: 8px;
-        min-width: 0;
-      }
-      .recognition-item .sub-label{
-        flex: 0 0 auto;
-        font-weight: 900;
-        color: #344054;
-      }
-      .recognition-item .sub-value{
-        flex: 1 1 auto;
-        min-width: 0;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      /* ✅ time + location at the end */
-      .recognition-item .meta{
-        margin-top: 10px;
-        display:flex;
-        gap: 14px;
-        flex-wrap: wrap;
-        color: #475467;
-        font-size: 12px;
-        align-items: center;
-      }
-      .recognition-item .meta-item{
-        display:flex;
-        align-items:center;
-        gap: 6px;
-      }
-      .recognition-item .meta-dot{
-        width: 6px; height: 6px;
-        border-radius: 50%;
-        background: #98a2b3;
-        opacity: .85;
-      }
-
-      .recognition-item .chev{
-        width: 26px;
-        height: 26px;
-        border-radius: 10px;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        color: #98a2b3;
-        flex-shrink: 0;
-        font-size: 22px;
-        line-height: 1;
-        margin-top: 6px;
-      }
-
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateX(10px); }
-        to   { opacity: 1; transform: translateX(0); }
-      }
-
-      .recognition-item.fade-out{
-        opacity: 0;
-        transform: translateX(10px);
-        transition: opacity 0.4s ease, transform 0.4s ease;
-      }
-
-      @media (max-width: 992px){
-        body{ overflow:auto; }
-        .main-container{
-          grid-template-columns: 1fr;
-          height: auto;
-        }
-        .video-panel, .sidebar{
-          height: auto;
-        }
-        .video-card, .welcome{
-          min-height: 70vh;
-        }
-      }
-    </style>
-  </head>
-
-  <body>
-    <div class="main-container">
-      <!-- LEFT -->
-      <div class="video-panel">
-        <div class="video-card">
-          <div class="video-header">
-            <div class="video-title">
-              <div class="icon">📷</div>
-              <div>Nhận diện khuôn mặt thời gian thực</div>
-            </div>
-            <div class="live-badge">
-              <span class="live-dot"></span> Live
-            </div>
-          </div>
-
-          <div id="video-grid" class="video-grid">
-            <div class="video-item" id="video-1">
-              <div class="video-container">
-                <div class="video-number">1</div>
-                <div class="status-badge status-waiting">waiting</div>
-
-                <div class="video-placeholder">
-                  <div>
-                    <strong>Video 1</strong><br />
-                    <small>Waiting for connection...</small>
-                  </div>
+    <body>
+        <div class="main-container">
+            <!-- Video Panel -->
+            <div class="video-panel">
+                <div id="video-grid" class="video-grid">
+                    <div class="video-item" id="video-1">
+                        <div class="video-container">
+                            <div class="video-number">1</div>
+                            <div class="status-badge status-waiting">
+                                waiting
+                            </div>
+                            <div class="video-placeholder">
+                                <div>
+                                    <strong>Video 1</strong><br />
+                                    <small>Waiting for connection...</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
+            </div>
 
-                <div class="scan-pill">
-                  <span class="user-icon">👤</span>
-                  <span>Đang quét khuôn mặt...</span>
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <div class="sidebar-header">Face Recognition</div>
+                <ul id="recognition-list"></ul>
+            </div>
+        </div>
+
+        <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+        <script>
+            // Configuration - can be overridden via URL params: ?server=IP&port=PORT
+            const urlParams = new URLSearchParams(window.location.search);
+            var ws_server = urlParams.get("server") || "192.168.6.16";
+            var ws_port = urlParams.get("port") || "8555";
+            // Add STUN server to get real IP (browser sends mDNS without it)
+            var rtc_configuration = {
+                iceServers: [
+                    { urls: "stun:stun.l.google.com:19302" }
+                ],
+            };
+
+            // Global variables
+            var video_instances = [];
+            var video_count = 1;
+
+            class SilentStreamPool {
+                constructor(poolSize = 10) {
+                    this.poolSize = poolSize;
+                    this.audioContext = null;
+                    this.streamPool = [];
+                    this.currentIndex = 0;
+                    this.initialized = false;
+                }
+
+                async init() {
+                    if (this.initialized) return;
+
+                    this.audioContext = new (
+                        window.AudioContext || window.webkitAudioContext
+                    )();
+                    const destination =
+                        this.audioContext.createMediaStreamDestination();
+
+                    for (let i = 0; i < this.poolSize; i++) {
+                        const stream = destination.stream.clone();
+                        this.streamPool.push(stream);
+                    }
+
+                    this.initialized = true;
+                }
+
+                getNextStream() {
+                    if (!this.initialized) {
+                        throw new Error("Pool chưa được khởi tạo!");
+                    }
+
+                    const stream = this.streamPool[this.currentIndex];
+                    this.currentIndex = (this.currentIndex + 1) % this.poolSize;
+                    return stream.clone();
+                }
+
+                async getSilentStream() {
+                    if (!this.initialized) {
+                        await this.init();
+                    }
+                    return this.getNextStream();
+                }
+            }
+
+            const silentStreamPool = new SilentStreamPool(1);
+
+            // Face data cache - populated via DataChannel from stream
+            let faceDataCache = {};
+
+            const MAX_RECOGNITION_ITEMS = 50;
+
+            function escapeHtml(text) {
+                const div = document.createElement("div");
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            function addRecognitionItem(name, timestamp) {
+                const list = document.getElementById("recognition-list");
+
+                // Get avatar from cache (base64 encoded)
+                const faceData = faceDataCache[name];
+                const avatarSrc =
+                    faceData && faceData.avatar
+                        ? `data:image/jpeg;base64,${faceData.avatar}`
+                        : 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%236c757d"><circle cx="12" cy="8" r="4"/><path d="M12 14c-6 0-8 3-8 6v2h16v-2c0-3-2-6-8-6z"/></svg>';
+
+                const item = document.createElement("li");
+                item.className = "recognition-item";
+                item.innerHTML = `
+                <img class="avatar" src="${avatarSrc}" alt="${escapeHtml(name)}">
+                <div class="info">
+                    <span class="name">${escapeHtml(name)}</span>
+                    <span class="time">${timestamp}</span>
                 </div>
-              </div>
-            </div>
-          </div>
+            `;
 
-        </div>
-      </div>
+                list.prepend(item);
 
-      <!-- RIGHT -->
-      <div class="sidebar">
-        <div class="welcome">
-          <div class="welcome-header">
-            <div class="star">⭐</div>
-            <div class="text">NHIỆT LIỆT CHÀO MỪNG CÁC ĐẠI BIỂU</div>
-          </div>
-          <ul id="recognition-list"></ul>
-        </div>
-      </div>
-    </div>
+                while (list.children.length > MAX_RECOGNITION_ITEMS) {
+                    list.lastElementChild.remove();
+                }
+            }
 
-    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
-    <script>
-      // Configuration - can be overridden via URL params: ?server=IP&port=PORT
-      const urlParams = new URLSearchParams(window.location.search);
-      var ws_server = urlParams.get("server") || "192.168.6.112";
-      var ws_port = urlParams.get("port") || "8555";
-      var rtc_configuration = { iceServers: [] };
+            function handleFaceEvent(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (
+                        data.type === "face_detected" &&
+                        data.name &&
+                        data.timestamp
+                    ) {
+                        // Cache avatar từ event
+                        if (data.avatar && !faceDataCache[data.name]) {
+                            faceDataCache[data.name] = { avatar: data.avatar };
+                        }
+                        addRecognitionItem(data.name, data.timestamp);
+                    }
+                } catch (e) {
+                    console.warn("Invalid face event:", e);
+                }
+            }
 
-      var video_instances = [];
-      var video_count = 1;
+            class VideoInstance {
+                constructor(index) {
+                    this.index = index;
+                    this.our_id = index.toString();
+                    this.peer_connection = null;
+                    this.data_channel = null;
+                    this.ws_conn = null;
+                    this.local_stream = null;
+                    this.status = "waiting";
+                    this.connect_attempts = 0;
 
-      class SilentStreamPool {
-        constructor(poolSize = 10) {
-          this.poolSize = poolSize;
-          this.audioContext = null;
-          this.streamPool = [];
-          this.currentIndex = 0;
-          this.initialized = false;
-        }
+                    this.initializeWebSocket();
+                }
 
-        async init() {
-          if (this.initialized) return;
+                initializeWebSocket() {
+                    this.connect_attempts++;
+                    if (this.connect_attempts > 3) {
+                        this.setStatus("error");
+                        return;
+                    }
 
-          this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          const destination = this.audioContext.createMediaStreamDestination();
+                    // ws:// for local network (no SSL)
+                    const ws_url = `ws://${ws_server}:${ws_port}`;
+                    this.ws_conn = new WebSocket(ws_url);
 
-          for (let i = 0; i < this.poolSize; i++) {
-            const stream = destination.stream.clone();
-            this.streamPool.push(stream);
-          }
+                    this.ws_conn.onopen = () => {
+                        this.ws_conn.send(`HELLO ${this.our_id}`);
+                        this.setStatus("waiting");
+                        this.connect_attempts = 0;
+                    };
 
-          this.initialized = true;
-        }
+                    this.ws_conn.onmessage = (event) => {
+                        this.handleServerMessage(event.data);
+                    };
 
-        getNextStream() {
-          if (!this.initialized) throw new Error("Pool chưa được khởi tạo!");
-          const stream = this.streamPool[this.currentIndex];
-          this.currentIndex = (this.currentIndex + 1) % this.poolSize;
-          return stream.clone();
-        }
+                    this.ws_conn.onclose = () => {
+                        this.setStatus("error");
+                        setTimeout(() => this.initializeWebSocket(), 2000);
+                    };
 
-        async getSilentStream() {
-          if (!this.initialized) await this.init();
-          return this.getNextStream();
-        }
-      }
+                    this.ws_conn.onerror = () => {
+                        this.setStatus("error");
+                        setTimeout(() => this.initializeWebSocket(), 3000);
+                    };
+                }
 
-      const silentStreamPool = new SilentStreamPool(1);
+                handleServerMessage(data) {
+                    if (data === "HELLO") {
+                        // Send SESSION to join the room
+                        this.ws_conn.send(`SESSION ${this.our_id}`);
+                        this.setStatus("waiting");
+                        return;
+                    }
 
-      // cache by key (person_id preferred else name)
-      let faceDataCache = {};
+                    if (data.startsWith("ERROR")) {
+                        this.setStatus("error");
+                        return;
+                    }
 
-      const MAX_RECOGNITION_ITEMS = 50;
+                    if (data === "SESSION_OK") {
+                        this.setStatus("connecting");
+                        this.createPeerConnection();
+                        return;
+                    }
 
-      // Each person show 15s
-      const DISPLAY_MS = 15000;
-      const activePeople = new Map(); // key -> { el, timer }
+                    try {
+                        const msg = JSON.parse(data);
+                        this.handleWebRTCMessage(msg);
+                    } catch (e) {
+                        console.log(
+                            `Video ${this.index} non-JSON message:`,
+                            data,
+                        );
+                    }
+                }
 
-      function escapeHtml(text) {
-        const div = document.createElement("div");
-        div.textContent = text ?? "";
-        return div.innerHTML;
-      }
+                handleWebRTCMessage(msg) {
+                    if (!this.peer_connection) {
+                        this.createPeerConnection();
+                    }
 
-      function defaultAvatarSvg() {
-        return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%236c757d"><circle cx="12" cy="8" r="4"/><path d="M12 14c-6 0-8 3-8 6v2h16v-2c0-3-2-6-8-6z"/></svg>';
-      }
+                    if (msg.sdp) {
+                        this.handleSDP(msg.sdp);
+                    } else if (msg.ice) {
+                        this.peer_connection.addIceCandidate(
+                            new RTCIceCandidate(msg.ice),
+                        );
+                    }
+                }
 
-      // keep your original avatar behavior
-      function getAvatarSrcByKey(key) {
-        const k = (key || "").trim();
-        const faceData = faceDataCache[k];
-        const av = faceData && faceData.avatar ? String(faceData.avatar).trim() : "";
-        if (!av) return defaultAvatarSvg();
-        if (av.startsWith("data:image/")) return av;
-        return `data:image/jpeg;base64,${av}`;
-      }
+                async handleSDP(sdp) {
+                    await this.peer_connection.setRemoteDescription(sdp);
 
-      function removePerson(key) {
-        const obj = activePeople.get(key);
-        if (!obj) return;
-        obj.el.classList.add("fade-out");
-        setTimeout(() => obj.el.remove(), 400);
-        activePeople.delete(key);
-      }
+                    if (sdp.type === "offer") {
+                        const answer =
+                            await this.peer_connection.createAnswer();
+                        await this.peer_connection.setLocalDescription(answer);
+                        this.ws_conn.send(JSON.stringify({ sdp: answer }));
+                    }
+                }
 
-      function addRecognitionItem(payload) {
-        const list = document.getElementById("recognition-list");
+                createPeerConnection() {
+                    this.peer_connection = new RTCPeerConnection(
+                        rtc_configuration,
+                    );
 
-        const key = String(payload.person_id || payload.name || "").trim();
-        if (!key) return;
+                    // Receive DataChannel from offerer (stream_face.py creates it)
+                    this.peer_connection.ondatachannel = (event) => {
+                        this.data_channel = event.channel;
+                        this.data_channel.onopen = () => {
+                            console.log("DataChannel open");
+                        };
+                        this.data_channel.onmessage = handleFaceEvent;
+                        this.data_channel.onerror = (e) =>
+                            console.error("DC error:", e);
+                        this.data_channel.onclose = () =>
+                            console.log("DataChannel closed");
+                    };
 
-        // ✅ show person_name (fallback to name)
-        const displayName = String(payload.person_name || payload.name || "Unknown").trim();
+                    this.peer_connection.ontrack = (event) => {
+                        // GStreamer webrtcbin may not include streams
+                        let stream;
+                        if (event.streams && event.streams.length > 0) {
+                            stream = event.streams[0];
+                        } else {
+                            stream = new MediaStream([event.track]);
+                        }
+                        this.setVideoStream(stream);
+                        this.setStatus("connected");
+                    };
 
-        const companyName = String(payload.company_name || "").trim();
-        const jobTitle = String(payload.job_title || "").trim();
-        const timestamp = String(payload.timestamp || "").trim();
+                    this.peer_connection.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            this.ws_conn.send(
+                                JSON.stringify({ ice: event.candidate }),
+                            );
+                        }
+                    };
 
-        const faceData = faceDataCache[key] || {};
-        const isVip = !!faceData.vip;
-        const location = faceData.location || "Sảnh chính";
+                    this.peer_connection.oniceconnectionstatechange = () => {
+                        const state = this.peer_connection.iceConnectionState;
 
-        if (activePeople.has(key)) {
-          const obj = activePeople.get(key);
-          clearTimeout(obj.timer);
+                        switch (state) {
+                            case "connected":
+                            case "completed":
+                                this.setStatus("connected");
+                                break;
+                            case "disconnected":
+                            case "failed":
+                                this.setStatus("error");
+                                break;
+                            case "connecting":
+                            case "checking":
+                                this.setStatus("connecting");
+                                break;
+                        }
+                    };
 
-          const img = obj.el.querySelector("img.avatar");
-          const nameEl = obj.el.querySelector(".name");
-          const companyEl = obj.el.querySelector(".company-text");
-          const titleEl = obj.el.querySelector(".title-text");
-          const timeEl = obj.el.querySelector(".time-text");
-          const locEl = obj.el.querySelector(".loc-text");
+                    this.getLocalStream().then((stream) => {
+                        if (stream) {
+                            stream.getTracks().forEach((track) => {
+                                this.peer_connection.addTrack(track, stream);
+                            });
+                        }
+                    });
+                }
 
-          if (img) img.src = getAvatarSrcByKey(key);
-          if (nameEl) nameEl.textContent = displayName;
-          if (companyEl) companyEl.textContent = companyName || "-";
-          if (titleEl) titleEl.textContent = jobTitle || "-";
-          if (timeEl) timeEl.textContent = timestamp;
-          if (locEl) locEl.textContent = location;
+                async getLocalStream() {
+                    try {
+                        this.local_stream =
+                            await silentStreamPool.getSilentStream();
+                        return this.local_stream;
+                    } catch (e) {
+                        const audioContext = new (
+                            window.AudioContext || window.webkitAudioContext
+                        )();
+                        const destination =
+                            audioContext.createMediaStreamDestination();
+                        this.local_stream = destination.stream;
+                        return this.local_stream;
+                    }
+                }
 
-          list.prepend(obj.el);
+                setVideoStream(stream) {
+                    const videoContainer = document.querySelector(
+                        `#video-${this.index} .video-container`,
+                    );
+                    const placeholder =
+                        videoContainer.querySelector(".video-placeholder");
 
-          obj.timer = setTimeout(() => removePerson(key), DISPLAY_MS);
-          activePeople.set(key, obj);
-          return;
-        }
+                    if (placeholder) {
+                        placeholder.remove();
+                    }
 
-        const avatarSrc = getAvatarSrcByKey(key);
+                    let video = videoContainer.querySelector("video");
+                    if (!video) {
+                        video = document.createElement("video");
+                        video.autoplay = true;
+                        video.playsinline = true;
+                        video.muted = true;
+                        videoContainer.appendChild(video);
 
-        const item = document.createElement("li");
-        item.className = "recognition-item" + (isVip ? " vip" : "");
-        item.setAttribute("data-key", key);
+                        // Nút unmute ở góc dưới trái
+                        const unmuteBtn = document.createElement("button");
+                        unmuteBtn.className = "unmute-btn muted";
+                        unmuteBtn.innerHTML = "🔇";
+                        unmuteBtn.onclick = function (e) {
+                            e.stopPropagation();
+                            video.muted = !video.muted;
+                            if (video.muted) {
+                                unmuteBtn.innerHTML = "🔇";
+                                unmuteBtn.classList.add("muted");
+                            } else {
+                                unmuteBtn.innerHTML = "🔊";
+                                unmuteBtn.classList.remove("muted");
+                            }
+                        };
+                        videoContainer.appendChild(unmuteBtn);
 
-        item.innerHTML = `
-          <img class="avatar" src="${avatarSrc}" alt="${escapeHtml(displayName)}">
-          <div class="info">
-            <div class="name-row">
-              <span class="name">${escapeHtml(displayName)}</span>
-              ${isVip ? `<span class="badge-vip">VIP</span>` : ``}
-            </div>
+                        // Nút fullscreen ở góc dưới phải
+                        const fullscreenBtn = document.createElement("button");
+                        fullscreenBtn.className = "fullscreen-btn";
+                        fullscreenBtn.innerHTML = "⛶";
+                        fullscreenBtn.onclick = function (e) {
+                            e.stopPropagation();
+                            if (document.fullscreenElement) {
+                                document.exitFullscreen();
+                            } else {
+                                videoContainer.requestFullscreen();
+                            }
+                        };
+                        videoContainer.appendChild(fullscreenBtn);
+                    }
 
-            <div class="sub">
-              <div class="sub-line">
-                <span class="sub-label">Công ty:</span>
-                <span class="sub-value company-text">${escapeHtml(companyName || "-")}</span>
-              </div>
-              <div class="sub-line">
-                <span class="sub-label">Chức vụ:</span>
-                <span class="sub-value title-text">${escapeHtml(jobTitle || "-")}</span>
-              </div>
-            </div>
+                    video.srcObject = stream;
+                }
 
-            <!-- ✅ time + location at the end -->
-            <div class="meta">
-              <div class="meta-item"><span class="meta-dot"></span><span class="time-text">${escapeHtml(timestamp)}</span></div>
-              <div class="meta-item"><span class="meta-dot"></span><span class="loc-text">${escapeHtml(location)}</span></div>
-            </div>
-          </div>
-          <div class="chev">›</div>
-        `;
+                setStatus(status) {
+                    this.status = status;
+                    const statusBadge = document.querySelector(
+                        `#video-${this.index} .status-badge`,
+                    );
+                    const videoItem = document.getElementById(
+                        `video-${this.index}`,
+                    );
 
-        list.prepend(item);
+                    if (statusBadge) {
+                        statusBadge.className = `status-badge status-${status}`;
+                        statusBadge.textContent = status;
+                    }
 
-        const timer = setTimeout(() => removePerson(key), DISPLAY_MS);
-        activePeople.set(key, { el: item, timer });
+                    if (videoItem) {
+                        videoItem.className = `video-item ${status}`;
+                    }
+                }
+            }
 
-        while (list.children.length > MAX_RECOGNITION_ITEMS) {
-          const last = list.lastElementChild;
-          if (!last) break;
+            async function setupVideos() {
+                await silentStreamPool.init();
 
-          const lastKey = last.getAttribute("data-key") || "";
-          if (lastKey && activePeople.has(lastKey)) {
-            const obj = activePeople.get(lastKey);
-            clearTimeout(obj.timer);
-            activePeople.delete(lastKey);
-          }
-          last.remove();
-        }
-      }
+                video_instances = [];
+                const instance = new VideoInstance(1);
+                video_instances.push(instance);
+            }
 
-      function handleFaceEvent(event) {
-        try {
-          const data = JSON.parse(event.data);
-
-          if (data.type === "face_detected" && (data.person_id || data.name) && data.timestamp) {
-            const key = String(data.person_id || data.name).trim();
-            if (!key) return;
-
-            // cache
-            const prev = faceDataCache[key] || {};
-            faceDataCache[key] = {
-              ...prev,
-              avatar: data.avatar ?? prev.avatar,
-              person_name: data.person_name ?? prev.person_name,
-              company_name: data.company_name ?? prev.company_name,
-              job_title: data.job_title ?? prev.job_title,
+            window.onload = function () {
+                setTimeout(async function () {
+                    await setupVideos();
+                }, 100);
             };
-
-            addRecognitionItem({
-              ...data,
-              person_id: key,
-              person_name: data.person_name || faceDataCache[key].person_name || "",
-              company_name: data.company_name || faceDataCache[key].company_name || "",
-              job_title: data.job_title || faceDataCache[key].job_title || "",
-            });
-          }
-        } catch (e) {
-          console.warn("Invalid face event:", e);
-        }
-      }
-
-      class VideoInstance {
-        constructor(index) {
-          this.index = index;
-          this.our_id = index.toString();
-          this.peer_connection = null;
-          this.data_channel = null;
-          this.ws_conn = null;
-          this.local_stream = null;
-          this.status = "waiting";
-          this.connect_attempts = 0;
-
-          this.initializeWebSocket();
-        }
-
-        initializeWebSocket() {
-          this.connect_attempts++;
-          if (this.connect_attempts > 3) {
-            this.setStatus("error");
-            return;
-          }
-
-          const ws_url = `ws://${ws_server}:${ws_port}`;
-          this.ws_conn = new WebSocket(ws_url);
-
-          this.ws_conn.onopen = () => {
-            this.ws_conn.send(`HELLO ${this.our_id}`);
-            this.setStatus("waiting");
-            this.connect_attempts = 0;
-          };
-
-          this.ws_conn.onmessage = (event) => {
-            this.handleServerMessage(event.data);
-          };
-
-          this.ws_conn.onclose = () => {
-            this.setStatus("error");
-            setTimeout(() => this.initializeWebSocket(), 2000);
-          };
-
-          this.ws_conn.onerror = () => {
-            this.setStatus("error");
-            setTimeout(() => this.initializeWebSocket(), 3000);
-          };
-        }
-
-        handleServerMessage(data) {
-          if (data === "HELLO") {
-            this.ws_conn.send(`SESSION ${this.our_id}`);
-            this.setStatus("waiting");
-            return;
-          }
-
-          if (data.startsWith("ERROR")) {
-            this.setStatus("error");
-            return;
-          }
-
-          if (data === "SESSION_OK") {
-            this.setStatus("connecting");
-            this.createPeerConnection();
-            return;
-          }
-
-          try {
-            const msg = JSON.parse(data);
-            this.handleWebRTCMessage(msg);
-          } catch (e) {
-            console.log(`Video ${this.index} non-JSON message:`, data);
-          }
-        }
-
-        handleWebRTCMessage(msg) {
-          if (!this.peer_connection) {
-            this.createPeerConnection();
-          }
-
-          if (msg.sdp) {
-            this.handleSDP(msg.sdp);
-          } else if (msg.ice) {
-            this.peer_connection.addIceCandidate(new RTCIceCandidate(msg.ice));
-          }
-        }
-
-        async handleSDP(sdp) {
-          await this.peer_connection.setRemoteDescription(sdp);
-
-          if (sdp.type === "offer") {
-            const answer = await this.peer_connection.createAnswer();
-            await this.peer_connection.setLocalDescription(answer);
-            this.ws_conn.send(JSON.stringify({ sdp: answer }));
-          }
-        }
-
-        createPeerConnection() {
-          this.peer_connection = new RTCPeerConnection(rtc_configuration);
-
-          this.peer_connection.ondatachannel = (event) => {
-            this.data_channel = event.channel;
-            this.data_channel.onopen = () => console.log("DataChannel open");
-            this.data_channel.onmessage = handleFaceEvent;
-            this.data_channel.onerror = (e) => console.error("DC error:", e);
-            this.data_channel.onclose = () => console.log("DataChannel closed");
-          };
-
-          this.peer_connection.ontrack = (event) => {
-            let stream;
-            if (event.streams && event.streams.length > 0) {
-              stream = event.streams[0];
-            } else {
-              stream = new MediaStream([event.track]);
-            }
-            this.setVideoStream(stream);
-            this.setStatus("connected");
-          };
-
-          this.peer_connection.onicecandidate = (event) => {
-            if (event.candidate) {
-              this.ws_conn.send(JSON.stringify({ ice: event.candidate }));
-            }
-          };
-
-          this.peer_connection.oniceconnectionstatechange = () => {
-            const state = this.peer_connection.iceConnectionState;
-
-            switch (state) {
-              case "connected":
-              case "completed":
-                this.setStatus("connected");
-                break;
-              case "disconnected":
-              case "failed":
-                this.setStatus("error");
-                break;
-              case "connecting":
-              case "checking":
-                this.setStatus("connecting");
-                break;
-            }
-          };
-
-          this.getLocalStream().then((stream) => {
-            if (stream) {
-              stream.getTracks().forEach((track) => {
-                this.peer_connection.addTrack(track, stream);
-              });
-            }
-          });
-        }
-
-        async getLocalStream() {
-          try {
-            this.local_stream = await silentStreamPool.getSilentStream();
-            return this.local_stream;
-          } catch (e) {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const destination = audioContext.createMediaStreamDestination();
-            this.local_stream = destination.stream;
-            return this.local_stream;
-          }
-        }
-
-        setVideoStream(stream) {
-          const videoContainer = document.querySelector(`#video-${this.index} .video-container`);
-          const placeholder = videoContainer.querySelector(".video-placeholder");
-
-          if (placeholder) {
-            placeholder.remove();
-          }
-
-          let video = videoContainer.querySelector("video");
-          if (!video) {
-            video = document.createElement("video");
-            video.autoplay = true;
-            video.playsinline = true;
-            video.muted = true;
-            videoContainer.appendChild(video);
-
-            const unmuteBtn = document.createElement("button");
-            unmuteBtn.className = "unmute-btn muted";
-            unmuteBtn.innerHTML = "🔇";
-            unmuteBtn.onclick = function (e) {
-              e.stopPropagation();
-              video.muted = !video.muted;
-              if (video.muted) {
-                unmuteBtn.innerHTML = "🔇";
-                unmuteBtn.classList.add("muted");
-              } else {
-                unmuteBtn.innerHTML = "🔊";
-                unmuteBtn.classList.remove("muted");
-              }
-            };
-            videoContainer.appendChild(unmuteBtn);
-
-            const fullscreenBtn = document.createElement("button");
-            fullscreenBtn.className = "fullscreen-btn";
-            fullscreenBtn.innerHTML = "⛶";
-            fullscreenBtn.onclick = function (e) {
-              e.stopPropagation();
-              if (document.fullscreenElement) {
-                document.exitFullscreen();
-              } else {
-                videoContainer.requestFullscreen();
-              }
-            };
-            videoContainer.appendChild(fullscreenBtn);
-          }
-
-          video.srcObject = stream;
-        }
-
-        setStatus(status) {
-          this.status = status;
-          const statusBadge = document.querySelector(`#video-${this.index} .status-badge`);
-          const videoItem = document.getElementById(`video-${this.index}`);
-
-          if (statusBadge) {
-            statusBadge.className = `status-badge status-${status}`;
-            statusBadge.textContent = status;
-          }
-
-          if (videoItem) {
-            videoItem.className = `video-item ${status}`;
-          }
-        }
-      }
-
-      async function setupVideos() {
-        await silentStreamPool.init();
-        video_instances = [];
-        const instance = new VideoInstance(1);
-        video_instances.push(instance);
-      }
-
-      window.onload = function () {
-        setTimeout(async function () {
-          await setupVideos();
-        }, 100);
-      };
-    </script>
-  </body>
+        </script>
+    </body>
 </html>

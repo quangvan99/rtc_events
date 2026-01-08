@@ -17,6 +17,27 @@ from sinks.base_sink import BaseSink
 from core.probe_registry import ProbeRegistry
 
 
+def _coerce_property_value(value):
+    """Convert string values to appropriate types for GStreamer properties"""
+    if not isinstance(value, str):
+        return value
+    # Try int
+    if value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
+        return int(value)
+    # Try float
+    try:
+        if '.' in value:
+            return float(value)
+    except ValueError:
+        pass
+    # Try bool
+    if value.lower() in ('true', 'yes', '1'):
+        return True
+    if value.lower() in ('false', 'no', '0'):
+        return False
+    return value
+
+
 class PipelineBuilder:
     """Config-driven DeepStream pipeline construction"""
 
@@ -36,6 +57,7 @@ class PipelineBuilder:
         self.elements: list[Gst.Element] = []
         self.named_elements: dict[str, Gst.Element] = {}
         self._counter = 0
+        self._multi_uri_src: Gst.Element | None = None  # nvmultiurisrcbin reference
 
     def _create_element(self, elem_cfg: dict) -> Gst.Element:
         """
@@ -63,9 +85,9 @@ class PipelineBuilder:
         if not elem:
             raise RuntimeError(f"Cannot create element: {elem_type}")
 
-        # Set properties
+        # Set properties (coerce string values from env var expansion)
         for key, value in elem_cfg.get("properties", {}).items():
-            elem.set_property(key, value)
+            elem.set_property(key, _coerce_property_value(value))
 
         # Handle caps
         if "caps" in elem_cfg:
@@ -134,6 +156,10 @@ class PipelineBuilder:
         """
         Build pipeline from configuration
 
+        Supports two source modes:
+        1. nvmultiurisrcbin: Dynamic multi-camera (includes internal muxer)
+        2. uridecodebin: Single source with separate nvstreammux
+
         Returns:
             Constructed GStreamer pipeline
 
@@ -145,19 +171,11 @@ class PipelineBuilder:
 
         self.pipeline = Gst.Pipeline.new(cfg.get("name", "pipeline"))
 
-        # Create source
+        # Detect source type
         src_cfg = cfg["source"]
-        src = self._create_element(src_cfg)
+        is_multi_uri = src_cfg["type"] == "nvmultiurisrcbin"
 
-        # Create muxer
-        mux_cfg = cfg["muxer"]
-        mux = self._create_element(mux_cfg)
-
-        # Create queue between source and muxer
-        queue_src = self._create_element({"type": "queue", "name": "queue_src"})
-        queue_src.set_property("max-size-buffers", 5)
-
-        # Create all elements in chain
+        # Create all elements in chain first
         chain_elements = []
         for elem_cfg in cfg.get("elements", []):
             elem = self._create_element(elem_cfg)
@@ -167,45 +185,78 @@ class PipelineBuilder:
             for pad_name, probe_name in elem_cfg.get("probes", {}).items():
                 self.probe_registry.attach(elem, pad_name, probe_name)
 
-        # Link muxer to first element in chain
-        if chain_elements:
-            if not mux.link(chain_elements[0]):
-                raise RuntimeError(
-                    f"Failed to link {mux.get_name()} -> {chain_elements[0].get_name()}"
-                )
+        # Create and link sink
+        sink_elem = self.sink.create(self.pipeline)
 
-        # Link elements chain
+        if is_multi_uri:
+            # nvmultiurisrcbin mode: includes internal muxer
+            src = self._create_element(src_cfg)
+            self._multi_uri_src = src
+            print(f"[PipelineBuilder] Using nvmultiurisrcbin (dynamic multi-camera)")
+
+            # Link: nvmultiurisrcbin -> chain[0] -> ... -> sink
+            if chain_elements:
+                if not src.link(chain_elements[0]):
+                    raise RuntimeError(
+                        f"Failed to link nvmultiurisrcbin -> {chain_elements[0].get_name()}"
+                    )
+            else:
+                # No chain, link directly to sink
+                if not src.link(sink_elem):
+                    raise RuntimeError("Failed to link nvmultiurisrcbin -> sink")
+
+        else:
+            # uridecodebin mode: separate nvstreammux
+            src = self._create_element(src_cfg)
+
+            # Create muxer (required for uridecodebin)
+            mux_cfg = cfg.get("muxer")
+            if not mux_cfg:
+                raise RuntimeError("muxer config required for uridecodebin source")
+            mux = self._create_element(mux_cfg)
+
+            # Queue between source and muxer
+            queue_src = self._create_element({"type": "queue", "name": "queue_src"})
+            queue_src.set_property("max-size-buffers", 5)
+
+            # Link: muxer -> chain[0]
+            if chain_elements:
+                if not mux.link(chain_elements[0]):
+                    raise RuntimeError(
+                        f"Failed to link {mux.get_name()} -> {chain_elements[0].get_name()}"
+                    )
+            else:
+                # No chain, link mux directly to sink
+                if not mux.link(sink_elem):
+                    raise RuntimeError(f"Failed to link {mux.get_name()} -> sink")
+
+            # Handle dynamic source pad
+            mux_sink = mux.request_pad_simple("sink_0")
+            queue_src.get_static_pad("src").link(mux_sink)
+
+            def on_pad_added(_, pad, q):
+                caps = pad.get_current_caps()
+                if caps and caps.get_structure(0).get_name().startswith("video"):
+                    sink_pad = q.get_static_pad("sink")
+                    if sink_pad and not sink_pad.is_linked():
+                        ret = pad.link(sink_pad)
+                        print(f"[PipelineBuilder] Source linked: {ret}")
+
+            src.connect("pad-added", on_pad_added, queue_src)
+
+        # Link chain elements
         for i in range(len(chain_elements) - 1):
             if not chain_elements[i].link(chain_elements[i + 1]):
                 raise RuntimeError(
                     f"Failed to link {chain_elements[i].get_name()} -> {chain_elements[i + 1].get_name()}"
                 )
 
-        # Create and link sink
-        sink_elem = self.sink.create(self.pipeline)
+        # Link last chain element to sink
         if chain_elements:
             if not chain_elements[-1].link(sink_elem):
                 raise RuntimeError(
                     f"Failed to link {chain_elements[-1].get_name()} -> sink"
                 )
-        else:
-            # No chain elements, link mux directly to sink
-            if not mux.link(sink_elem):
-                raise RuntimeError(f"Failed to link {mux.get_name()} -> sink")
-
-        # Handle dynamic source pad
-        mux_sink = mux.request_pad_simple("sink_0")
-        queue_src.get_static_pad("src").link(mux_sink)
-
-        def on_pad_added(_, pad, q):
-            caps = pad.get_current_caps()
-            if caps and caps.get_structure(0).get_name().startswith("video"):
-                sink = q.get_static_pad("sink")
-                if sink and not sink.is_linked():
-                    ret = pad.link(sink)
-                    print(f"[PipelineBuilder] Source linked: {ret}")
-
-        src.connect("pad-added", on_pad_added, queue_src)
 
         # Add bus watch
         bus = self.pipeline.get_bus()
@@ -225,6 +276,15 @@ class PipelineBuilder:
             Element if found, None otherwise
         """
         return self.named_elements.get(name)
+
+    def get_multi_uri_src(self) -> Gst.Element | None:
+        """
+        Get nvmultiurisrcbin element for CameraManager access
+
+        Returns:
+            nvmultiurisrcbin element if using multi-camera mode, None otherwise
+        """
+        return self._multi_uri_src
 
     def set_bus_callback(self, callback) -> None:
         """

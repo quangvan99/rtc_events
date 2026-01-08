@@ -21,6 +21,7 @@ CONFIG_PATH = str(Path(__file__).parent.parent / "configs" / "face-recognition.y
 
 
 def main():
+    
     config = load_config(CONFIG_PATH)
     rec = config.get("recognition", {})
 

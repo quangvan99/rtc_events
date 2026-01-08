@@ -9,14 +9,17 @@ from sinks.base_sink import BaseSink
 
 
 class FilesinkAdapter(BaseSink):
-    """Sink adapter for recording to MP4 files with H.264 encoding"""
+    """Sink adapter for recording to video files with H.264 encoding
+
+    Supports MP4 and AVI formats. AVI recommended for abrupt termination resilience.
+    """
 
     def __init__(
-        self, location: str = "output.mp4", codec: str = "h264", bitrate: int = 4000000
+        self, location: str = "output.avi", codec: str = "h264", bitrate: int = 4000000
     ):
         """
         Args:
-            location: Output file path (default: output.mp4)
+            location: Output file path (default: output.avi)
             codec: Video codec (default: h264)
             bitrate: Encoding bitrate in bps (default: 4000000 = 4 Mbps)
         """
@@ -29,7 +32,8 @@ class FilesinkAdapter(BaseSink):
         """
         Create filesink pipeline: videoconvert -> encoder -> parser -> muxer -> filesink
 
-        Returns first element (videoconvert) for linking
+        Uses AVI muxer for resilience to abrupt termination.
+        Returns first element (videoconvert) for linking.
         """
         # Create elements - try hardware encoder first, fallback to software
         videoconvert = Gst.ElementFactory.make("videoconvert", "filesink_convert")
@@ -42,7 +46,15 @@ class FilesinkAdapter(BaseSink):
             encoder = Gst.ElementFactory.make("x264enc", "filesink_encoder")
 
         parser = Gst.ElementFactory.make("h264parse", "filesink_parser")
-        muxer = Gst.ElementFactory.make("mp4mux", "filesink_muxer")
+
+        # Use AVI muxer - more resilient to abrupt termination than MP4
+        # MP4 requires moov atom at end, AVI doesn't
+        if self.location.endswith(".mp4"):
+            muxer = Gst.ElementFactory.make("mp4mux", "filesink_muxer")
+            print("[FilesinkAdapter] Warning: MP4 may be corrupted if not properly closed")
+        else:
+            muxer = Gst.ElementFactory.make("avimux", "filesink_muxer")
+
         filesink = Gst.ElementFactory.make("filesink", "filesink")
 
         if not all([videoconvert, encoder, parser, muxer, filesink]):
@@ -50,11 +62,10 @@ class FilesinkAdapter(BaseSink):
 
         # Configure encoder based on type
         if use_nvenc:
-            # NVIDIA hardware encoder
+            # NVIDIA hardware encoder (nvv4l2h264enc)
             encoder.set_property("bitrate", self.bitrate)
-            encoder.set_property("preset-level", 1)  # UltraFastPreset
-            encoder.set_property("insert-sps-pps", True)
-            encoder.set_property("bufapi-version", True)
+            encoder.set_property("iframeinterval", 30)
+            encoder.set_property("preset-id", 1)  # P1 = highest performance
         else:
             # x264 software encoder
             encoder.set_property("bitrate", self.bitrate // 1000)  # x264 uses kbps
@@ -85,8 +96,9 @@ class FilesinkAdapter(BaseSink):
         # Store elements for cleanup
         self.elements = [videoconvert, encoder, parser, muxer, filesink]
 
+        mux_type = "AVI" if not self.location.endswith(".mp4") else "MP4"
         print(
-            f"[FilesinkAdapter] Using {'NVIDIA hardware' if use_nvenc else 'x264 software'} encoder"
+            f"[FilesinkAdapter] Using {'NVIDIA hardware' if use_nvenc else 'x264 software'} encoder, {mux_type} muxer"
         )
 
         # Return first element for linking
