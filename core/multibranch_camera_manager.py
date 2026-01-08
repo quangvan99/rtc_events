@@ -100,19 +100,33 @@ class MultibranchCameraManager:
                 bin_elem.add(nvurisrcbin)
                 bin_elem.add(tee)
 
-                # 2. Handle nvurisrcbin dynamic pad (connects decoder to tee)
-                def on_pad_added(src, pad, data):
-                    tee_elem, cam_id = data
-                    caps = pad.get_current_caps()
-                    if caps:
-                        struct = caps.get_structure(0)
-                        if struct and struct.get_name().startswith("video"):
-                            tee_sink = tee_elem.get_static_pad("sink")
-                            if tee_sink and not tee_sink.is_linked():
-                                ret = pad.link(tee_sink)
-                                logger.info(f"[{cam_id}] nvurisrcbin -> tee linked: {ret}")
+                # Fakesink for audio - needed to prevent not-linked errors
+                audio_fakesink = Gst.ElementFactory.make("fakesink", f"audio_fake_{camera_id}")
+                audio_fakesink.set_property("sync", False)
+                audio_fakesink.set_property("async", False)
+                bin_elem.add(audio_fakesink)
 
-                nvurisrcbin.connect("pad-added", on_pad_added, (tee, camera_id))
+                # 2. Handle nvurisrcbin dynamic pad (connects decoder to tee, audio to fakesink)
+                # nvurisrcbin pads: vsrc_%u for video, asrc_%u for audio
+                def on_pad_added(src, pad, data):
+                    tee_elem, cam_id, fake_audio = data
+                    pad_name = pad.get_name()
+                    print(f"[{cam_id}] Pad added: {pad_name}")
+
+                    if pad_name.startswith("vsrc"):
+                        # Video pad -> tee
+                        tee_sink = tee_elem.get_static_pad("sink")
+                        if tee_sink and not tee_sink.is_linked():
+                            ret = pad.link(tee_sink)
+                            print(f"[{cam_id}] nvurisrcbin video -> tee linked: {ret}")
+                    elif pad_name.startswith("asrc"):
+                        # Audio pad -> fakesink to prevent not-linked errors
+                        fake_sink = fake_audio.get_static_pad("sink")
+                        if fake_sink and not fake_sink.is_linked():
+                            ret = pad.link(fake_sink)
+                            print(f"[{cam_id}] nvurisrcbin audio -> fakesink linked: {ret}")
+
+                nvurisrcbin.connect("pad-added", on_pad_added, (tee, camera_id, audio_fakesink))
 
                 # 3. Create queues and link to branches
                 branch_queues = {}

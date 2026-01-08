@@ -24,6 +24,17 @@ curl -X POST 'http://localhost:9001/api/v1/stream/remove' \
   -H 'Content-Type: application/json' \
   -d '{"value":{"camera_id":"cam1","change":"camera_remove"}}'
 
+
+  # Start pipeline with API
+  python bin/run_multi_branch.py --config configs/multi-branch.yaml --port 8080
+
+  # Add camera via API
+  curl -X POST http://localhost:8080/api/cameras \
+    -H "Content-Type: application/json" \
+    -d '{"camera_id": "cam1", "uri": "file:///home/mq/disk2T/quangnv/face/data/videos/change_id.mp4", "branches": ["recognition", "detection"]}'
+
+  # List cameras
+  curl http://localhost:8080/api/cameras
 =====================================
 Hay danh gia muc do de dung khi di tu config
 Toi dang muon tu projectbase nay, sau do phat trien cac bai toan AI khac, vi du nhan dien bien so xe 
@@ -98,3 +109,14 @@ Hien tai khi toi add camera thu 2 thi no ve boundingbox len camera thu nhat. Co 
 
 
 /home/mq/disk2T/quangnv/face/plans/20260108-2320-nvurisrcbin-tee-multi-branch/plan.md
+
+
+tao 1 file test 1 pipeline chạy sẵn 2 bài toán:
+    - 1 nhánh detect face recognition  (đã có sẵn ): @face/apps/face
+    - 1 nhánh đơn giản chỉ face detection.
+    - output moi branch la 1 video de toi thay dc su thay doi cua viec add camera cho branch
+    - file test de trong folder @bin
+
+sau do toi se tu curl camera (nho huong dan toi su dung api curl de CRUD camera vao branch)
+
+ sua lai bin/test_multi_branch_video.py su dung file yaml  

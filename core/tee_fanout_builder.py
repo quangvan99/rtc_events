@@ -252,6 +252,9 @@ class TeeFanoutPipelineBuilder:
         if "tracker" not in cfg:
             return
 
+        # Get config file directory for resolving relative paths
+        cfg_dir = os.path.dirname(os.path.abspath(cfg_path))
+
         props_map = {
             "tracker-width": ("tracker-width", int),
             "tracker-height": ("tracker-height", int),
@@ -263,6 +266,9 @@ class TeeFanoutPipelineBuilder:
         for key, (prop, typ) in props_map.items():
             if key in cfg["tracker"]:
                 val = cfg["tracker"][key]
+                # Resolve relative paths for ll-config-file
+                if key == "ll-config-file" and not os.path.isabs(val):
+                    val = os.path.join(cfg_dir, val)
                 tracker.set_property(prop, typ(val))
 
         print(f"[TeeFanoutBuilder] Tracker configured from: {cfg_path}")

@@ -14,6 +14,9 @@ class FilesinkAdapter(BaseSink):
     Supports MP4 and AVI formats. AVI recommended for abrupt termination resilience.
     """
 
+    # Class-level counter for unique element naming
+    _instance_counter = 0
+
     def __init__(
         self, location: str = "output.avi", codec: str = "h264", bitrate: int = 4000000
     ):
@@ -27,37 +30,48 @@ class FilesinkAdapter(BaseSink):
         self.codec = codec
         self.bitrate = bitrate
         self.elements = []
+        # Unique ID for element naming to avoid conflicts
+        self._id = FilesinkAdapter._instance_counter
+        FilesinkAdapter._instance_counter += 1
 
     def create(self, pipeline: Gst.Pipeline) -> Gst.Element:
         """
-        Create filesink pipeline: videoconvert -> encoder -> parser -> muxer -> filesink
+        Create filesink pipeline for DeepStream:
+        nvvideoconvert(->I420) -> nvv4l2h264enc -> h264parse -> muxer -> filesink
 
+        Handles NVMM buffer conversion to I420 for hardware encoder.
         Uses AVI muxer for resilience to abrupt termination.
-        Returns first element (videoconvert) for linking.
+        Returns first element (nvvideoconvert) for linking.
         """
-        # Create elements - try hardware encoder first, fallback to software
-        videoconvert = Gst.ElementFactory.make("videoconvert", "filesink_convert")
+        # Create elements with unique names to support multiple sinks
+        prefix = f"filesink{self._id}"
 
-        # Try hardware encoder first, fallback to x264enc
-        encoder = Gst.ElementFactory.make("nvv4l2h264enc", "filesink_encoder")
-        use_nvenc = encoder is not None
+        # nvvideoconvert to convert NVMM -> CPU memory for software encoder
+        nvvidconv = Gst.ElementFactory.make("nvvideoconvert", f"{prefix}_nvvidconv")
 
-        if not encoder:
-            encoder = Gst.ElementFactory.make("x264enc", "filesink_encoder")
+        # Capsfilter to convert to CPU memory (no NVMM) for software encoder
+        capsfilter = Gst.ElementFactory.make("capsfilter", f"{prefix}_caps")
+        caps = Gst.Caps.from_string("video/x-raw, format=I420")
+        capsfilter.set_property("caps", caps)
 
-        parser = Gst.ElementFactory.make("h264parse", "filesink_parser")
+        # Use x264 software encoder for stability (nvv4l2h264enc has memory issues in containers)
+        encoder = Gst.ElementFactory.make("x264enc", f"{prefix}_encoder")
+        videoconvert = None  # Not needed, nvvidconv handles conversion
+        use_nvenc = False
+
+        parser = Gst.ElementFactory.make("h264parse", f"{prefix}_parser")
 
         # Use AVI muxer - more resilient to abrupt termination than MP4
-        # MP4 requires moov atom at end, AVI doesn't
         if self.location.endswith(".mp4"):
-            muxer = Gst.ElementFactory.make("mp4mux", "filesink_muxer")
+            muxer = Gst.ElementFactory.make("mp4mux", f"{prefix}_muxer")
             print("[FilesinkAdapter] Warning: MP4 may be corrupted if not properly closed")
         else:
-            muxer = Gst.ElementFactory.make("avimux", "filesink_muxer")
+            muxer = Gst.ElementFactory.make("avimux", f"{prefix}_muxer")
 
-        filesink = Gst.ElementFactory.make("filesink", "filesink")
+        filesink = Gst.ElementFactory.make("filesink", f"{prefix}_sink")
 
-        if not all([videoconvert, encoder, parser, muxer, filesink]):
+        required = [nvvidconv, capsfilter, encoder, parser, muxer, filesink]
+        if not all(required):
             raise RuntimeError("Failed to create filesink elements")
 
         # Configure encoder based on type
@@ -77,15 +91,18 @@ class FilesinkAdapter(BaseSink):
         filesink.set_property("sync", False)
 
         # Add to pipeline
-        pipeline.add(videoconvert)
+        pipeline.add(nvvidconv)
+        pipeline.add(capsfilter)
         pipeline.add(encoder)
         pipeline.add(parser)
         pipeline.add(muxer)
         pipeline.add(filesink)
 
-        # Link elements
-        if not videoconvert.link(encoder):
-            raise RuntimeError("Failed to link videoconvert -> encoder")
+        # Link elements: nvvidconv -> capsfilter -> encoder -> parser -> muxer -> filesink
+        if not nvvidconv.link(capsfilter):
+            raise RuntimeError("Failed to link nvvidconv -> capsfilter")
+        if not capsfilter.link(encoder):
+            raise RuntimeError("Failed to link capsfilter -> encoder")
         if not encoder.link(parser):
             raise RuntimeError("Failed to link encoder -> parser")
         if not parser.link(muxer):
@@ -94,7 +111,7 @@ class FilesinkAdapter(BaseSink):
             raise RuntimeError("Failed to link muxer -> filesink")
 
         # Store elements for cleanup
-        self.elements = [videoconvert, encoder, parser, muxer, filesink]
+        self.elements = [nvvidconv, capsfilter, encoder, parser, muxer, filesink]
 
         mux_type = "AVI" if not self.location.endswith(".mp4") else "MP4"
         print(
@@ -102,7 +119,7 @@ class FilesinkAdapter(BaseSink):
         )
 
         # Return first element for linking
-        return videoconvert
+        return nvvidconv
 
     def start(self) -> None:
         """Called before pipeline starts - nothing to do for filesink"""
