@@ -1,0 +1,139 @@
+# Multi-Branch Pipeline Configuration
+# Uses nvurisrcbin + tee for single-decode, multi-branch fanout
+#
+# Architecture:
+#   Camera -> nvurisrcbin -> tee -> queue -> nvstreammux (Branch A) -> PGIE -> ...
+#                               -> queue -> nvstreammux (Branch B) -> PGIE -> ...
+#
+# Camera management via REST API (Phase 3):
+#   POST /api/cameras - Add camera to branches
+#   DELETE /api/cameras/{id} - Remove camera
+
+# =============================================================================
+# Pipeline Definition
+# =============================================================================
+pipeline:
+  name: multi-branch-tee-pipeline
+
+  # Branch definitions - each branch has independent nvstreammux
+  branches:
+    # Branch 1: Face Recognition (PGIE + tracker + SGIE)
+    recognition:
+      max_cameras: 8
+
+      muxer:
+        batch-size: 8
+        batched-push-timeout: 40000
+        width: 1920
+        height: 1080
+        live-source: 1
+        nvbuf-memory-type: 0
+
+      elements:
+        # Queue for backpressure isolation
+        - type: queue
+          properties:
+            max-size-buffers: 5
+            leaky: 2
+
+        # Face detection (PGIE)
+        - type: nvinfer
+          name: pgie
+          config_file: "${PGIE_CONFIG:data/face/models/scrfd640/infer.txt}"
+
+        # Object tracking
+        - type: nvtracker
+          name: tracker
+          config_file: "${TRACKER_CONFIG:data/face/models/NvDCF/config_tracker.txt}"
+
+        # Face embedding (SGIE)
+        - type: nvinfer
+          name: sgie
+          config_file: "${SGIE_CONFIG:data/face/models/arcface/infer.txt}"
+
+        # Output queue
+        - type: queue
+          properties:
+            max-size-buffers: 3
+            leaky: 2
+
+        # Tile multiple streams
+        - type: nvmultistreamtiler
+          name: tiler
+          properties:
+            rows: 2
+            columns: 2
+            width: 1920
+            height: 1080
+
+        # Draw bounding boxes
+        - type: nvdsosd
+          properties:
+            process-mode: 0
+            display-text: 1
+
+    # Branch 2: Face Detection Only (PGIE only, no tracking/recognition)
+    detection:
+      max_cameras: 8
+
+      muxer:
+        batch-size: 8
+        batched-push-timeout: 40000
+        width: 1920
+        height: 1080
+        live-source: 1
+        nvbuf-memory-type: 0
+
+      elements:
+        # Queue for backpressure isolation
+        - type: queue
+          properties:
+            max-size-buffers: 5
+            leaky: 2
+
+        # Face detection (PGIE)
+        - type: nvinfer
+          name: pgie
+          config_file: "${PGIE_CONFIG:data/face/models/scrfd640/infer.txt}"
+
+        # Output queue
+        - type: queue
+          properties:
+            max-size-buffers: 3
+            leaky: 2
+
+        # Tile multiple streams
+        - type: nvmultistreamtiler
+          name: tiler
+          properties:
+            rows: 2
+            columns: 2
+            width: 1920
+            height: 1080
+
+        # Draw bounding boxes
+        - type: nvdsosd
+          properties:
+            process-mode: 0
+            display-text: 1
+
+# =============================================================================
+# Sink Configuration (per branch)
+# =============================================================================
+sink:
+  # Default sink type for all branches
+  type: "${OUTPUT_MODE:fakesink}"
+
+  fakesink:
+    sync: false
+
+  webrtc:
+    ws_url: "${WS_URL:ws://192.168.6.16:8555}"
+    peer_id: "1"
+
+# =============================================================================
+# Camera REST API Configuration
+# =============================================================================
+camera_api:
+  host: "${API_HOST:0.0.0.0}"
+  port: "${API_PORT:8080}"

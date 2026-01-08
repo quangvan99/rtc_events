@@ -14,14 +14,18 @@ from sinks.base_sink import BaseSink
 class FakesinkAdapter(BaseSink):
     """Fakesink adapter for pipeline testing without output"""
 
-    def __init__(self, sync: bool = False):
+    _counter = 0  # Class-level counter for unique names
+
+    def __init__(self, sync: bool = False, name: str = None):
         """
         Initialize fakesink adapter.
 
         Args:
             sync: If True, sink synchronizes to clock (default: False for max speed)
+            name: Optional custom name for the sink element
         """
         self.sync = sync
+        self.name = name
         self.element: Gst.Element | None = None
 
     def create(self, pipeline: Gst.Pipeline) -> Gst.Element:
@@ -30,14 +34,21 @@ class FakesinkAdapter(BaseSink):
 
         Returns: fakesink element for linking
         """
-        self.element = Gst.ElementFactory.make("fakesink", "sink")
+        # Generate unique name if not provided
+        if self.name:
+            sink_name = self.name
+        else:
+            FakesinkAdapter._counter += 1
+            sink_name = f"fakesink_{FakesinkAdapter._counter}"
+
+        self.element = Gst.ElementFactory.make("fakesink", sink_name)
         if not self.element:
             raise RuntimeError("Cannot create fakesink element")
 
         self.element.set_property("sync", self.sync)
         pipeline.add(self.element)
 
-        print(f"[Fakesink] Created (sync={self.sync})")
+        print(f"[Fakesink] Created '{sink_name}' (sync={self.sync})")
         return self.element
 
     def start(self) -> None:
