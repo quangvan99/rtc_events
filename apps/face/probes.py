@@ -181,6 +181,12 @@ class FaceProbes:
                 frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
                 source_id = frame_meta.source_id  # Extract source_id
 
+                # Debug: log source_id from DeepStream
+                if self.source_mapper:
+                    camera_id = self.source_mapper.get_camera_id(source_id)
+                    if frame_meta.frame_num % 300 == 0:  # Log every 10s at 30fps
+                        print(f"[DEBUG] Frame from source_id={source_id} -> camera_id={camera_id}")
+
                 l_obj = frame_meta.obj_meta_list
                 while l_obj:
                     try:

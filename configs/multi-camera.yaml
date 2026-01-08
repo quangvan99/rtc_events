@@ -97,14 +97,8 @@ pipeline:
               max-size-buffers: 3
               leaky: 2
 
-        - type: nvdsosd
-          properties:
-              process-mode: 0
-              display-text: 1
-          probes:
-              src: fps_probe
-
-        # Tile multiple streams into single view for WebRTC output
+        # Tile multiple streams into single view BEFORE drawing OSD
+        # This ensures bounding boxes are drawn at correct tile positions
         - type: nvmultistreamtiler
           name: tiler
           properties:
@@ -112,6 +106,14 @@ pipeline:
               columns: 2
               width: 1920
               height: 1080
+
+        # Draw bounding boxes AFTER tiling so coordinates are correct
+        - type: nvdsosd
+          properties:
+              process-mode: 0
+              display-text: 1
+          probes:
+              src: fps_probe
 
 # =============================================================================
 # Sink Configuration

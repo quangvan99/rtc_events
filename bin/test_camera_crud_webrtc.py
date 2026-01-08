@@ -3,7 +3,7 @@
 Camera CRUD Test with WebRTC Output
 
 Test file for dynamic add/remove cameras via REST API with WebRTC streaming.
-Signaling server and web viewer should be running before this script.
+Uses a REST proxy to keep SourceIDMapper in sync with nvmultiurisrcbin.
 
 Prerequisites:
     1. Start signaling: python bin/run_signaling.py
@@ -12,24 +12,27 @@ Prerequisites:
 Usage:
     python bin/test_camera_crud_webrtc.py
 
-Then use these curl commands to add/remove cameras:
+Then use these curl commands to add/remove cameras (use PROXY port 9001):
 
 Add camera:
-    curl -X POST 'http://localhost:9000/api/v1/stream/add' \
+    curl -X POST 'http://localhost:9001/api/v1/stream/add' \
       -H 'Content-Type: application/json' \
       -d '{"value":{"camera_id":"cam1","camera_url":"file:///path/to/video.mp4","change":"camera_add"}}'
 
-    curl -X POST 'http://localhost:9000/api/v1/stream/add' \
+    curl -X POST 'http://localhost:9001/api/v1/stream/add' \
       -H 'Content-Type: application/json' \
-      -d '{"value":{"camera_id":"cam1","camera_url":"rtsp://admin:pass@192.168.1.100/stream","change":"camera_add"}}'
+      -d '{"value":{"camera_id":"cam2","camera_url":"rtsp://admin:pass@192.168.1.100/stream","change":"camera_add"}}'
 
 Remove camera:
-    curl -X POST 'http://localhost:9000/api/v1/stream/remove' \
+    curl -X POST 'http://localhost:9001/api/v1/stream/remove' \
       -H 'Content-Type: application/json' \
       -d '{"value":{"camera_id":"cam1","change":"camera_remove"}}'
 
-List cameras (via Python API - not REST):
-    # See CameraManager.list() for active cameras
+List cameras:
+    curl http://localhost:9001/api/v1/cameras
+
+Note: Port 9001 is the proxy that syncs SourceIDMapper.
+      Port 9000 is nvmultiurisrcbin's internal REST API (don't use directly).
 """
 
 # Suppress GStreamer debug logs
@@ -48,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core import load_config, PipelineBuilder
 from core.source_mapper import SourceIDMapper
 from core.camera_manager import CameraManager
+from core.camera_rest_proxy import CameraRESTProxy
 from sinks.webrtc import WebRTCAdapter
 from apps.face import FaceDatabase, TrackerManager
 from apps.face.probes import FaceProbes
@@ -99,31 +103,50 @@ async def main():
 
     rest_host = cam_cfg.get("rest_host", "localhost")
     rest_port = cam_cfg.get("rest_port", 9000)
+    proxy_port = cam_cfg.get("proxy_port", 9001)
+
+    # Create REST proxy to sync SourceIDMapper
+    rest_proxy = CameraRESTProxy(
+        mapper=source_mapper,
+        upstream_host=rest_host,
+        upstream_port=rest_port,
+        proxy_host="0.0.0.0",
+        proxy_port=proxy_port,
+    )
 
     print("=" * 70)
     print("Camera CRUD Test with WebRTC Output")
     print("=" * 70)
     print(f"Config: {CONFIG_PATH}")
     print(f"WebRTC: {ws_url} (peer_id={peer_id})")
-    print(f"REST API: http://{rest_host}:{rest_port}")
+    print(f"REST Proxy: http://0.0.0.0:{proxy_port} (use this for curl)")
+    print(f"Upstream:   http://{rest_host}:{rest_port} (nvmultiurisrcbin)")
     print("=" * 70)
     print()
     print("ADD CAMERA:")
-    print(f"  curl -X POST 'http://{rest_host}:{rest_port}/api/v1/stream/add' \\")
+    print(f"  curl -X POST 'http://localhost:{proxy_port}/api/v1/stream/add' \\")
     print("    -H 'Content-Type: application/json' \\")
     print("    -d '{\"value\":{\"camera_id\":\"cam1\",\"camera_url\":\"file:///path/to/video.mp4\",\"change\":\"camera_add\"}}'")
     print()
     print("REMOVE CAMERA:")
-    print(f"  curl -X POST 'http://{rest_host}:{rest_port}/api/v1/stream/remove' \\")
+    print(f"  curl -X POST 'http://localhost:{proxy_port}/api/v1/stream/remove' \\")
     print("    -H 'Content-Type: application/json' \\")
     print("    -d '{\"value\":{\"camera_id\":\"cam1\",\"change\":\"camera_remove\"}}'")
+    print()
+    print("LIST CAMERAS:")
+    print(f"  curl http://localhost:{proxy_port}/api/v1/cameras")
     print()
     print("=" * 70)
     print("Press Ctrl+C to stop")
     print("=" * 70)
 
     async def setup():
-        """Setup WebRTC connection before pipeline starts"""
+        """Setup WebRTC connection and REST proxy before pipeline starts"""
+        # Start REST proxy
+        await rest_proxy.start()
+        print(f"\n[REST Proxy] Running on port {proxy_port}")
+
+        # Setup WebRTC connection
         await webrtc_sink.connect()
         asyncio.create_task(webrtc_sink.handle_signaling())
         await asyncio.sleep(2)
@@ -135,6 +158,7 @@ async def main():
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
+        await rest_proxy.stop()
         await webrtc_sink.disconnect()
         print("Done")
 
