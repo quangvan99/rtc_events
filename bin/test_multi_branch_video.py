@@ -2,51 +2,32 @@
 """
 Test Multi-Branch Pipeline with Video Output
 
-2 branches:
-- recognition: Face detection + tracking + face embedding (full face recognition)
-- detection: Face detection only (simple)
-
-Each branch outputs to a separate video file so you can see the difference.
+Uses YAML config from configs/multi-branch.yaml.
+Runs automated test scenario:
+  1. Add camera1 to recognition + detection branches
+  2. Wait 2s, add camera2 to recognition + detection
+  3. Wait 3s, remove camera1 from detection branch
+  4. Wait for video to complete
 
 Usage:
     python bin/test_multi_branch_video.py
 
-Then use curl to add cameras:
-    # Add camera to both branches
-    curl -X POST http://localhost:8080/api/cameras \
-         -H "Content-Type: application/json" \
-         -d '{"camera_id": "cam1", "uri": "file:///path/to/video.mp4", "branches": ["recognition", "detection"]}'
-
-    # Add camera to recognition only
-    curl -X POST http://localhost:8080/api/cameras \
-         -H "Content-Type: application/json" \
-         -d '{"camera_id": "cam2", "uri": "rtsp://...", "branches": ["recognition"]}'
-
-    # List cameras
-    curl http://localhost:8080/api/cameras
-
-    # Remove camera from detection branch
-    curl -X DELETE http://localhost:8080/api/cameras/cam1/branches/detection
-
-    # Remove camera entirely
-    curl -X DELETE http://localhost:8080/api/cameras/cam1
-
-Output videos:
-    - output_recognition.avi: Full face recognition with names
-    - output_detection.avi: Simple face detection boxes
+Output:
+    - /tmp/multi_branch_output/output_recognition.avi
+    - /tmp/multi_branch_output/output_detection.avi
 """
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
-import os
 
-# Get project root directory
+import yaml
+
+# Project root setup
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
-
-# Change to project root so relative paths in config files work
 os.chdir(PROJECT_ROOT)
 
 import gi
@@ -56,108 +37,91 @@ from gi.repository import Gst
 from core.tee_fanout_builder import TeeFanoutPipelineBuilder
 from core.multibranch_camera_manager import MultibranchCameraManager
 from api.camera_api import CameraAPIServer
-from sinks.fakesink_adapter import FakesinkAdapter
+from sinks.filesink_adapter import FilesinkAdapter
 
 
-def get_config():
-    """Config for 2 branches with video output"""
-    return {
-        "pipeline": {
-            "name": "multi-branch-video-test",
-            "branches": {
-                # Branch 1: Full Face Recognition (PGIE + tracker + SGIE)
-                "recognition": {
-                    "max_cameras": 8,
-                    "muxer": {
-                        "batch-size": 8,
-                        "batched-push-timeout": 40000,
-                        "width": 1920,
-                        "height": 1080,
-                        "live-source": 1,
-                        "nvbuf-memory-type": 0,
-                    },
-                    "elements": [
-                        # Queue for isolation
-                        {"type": "queue", "properties": {"max-size-buffers": 5, "leaky": 2}},
+def load_yaml_config(config_path: str) -> dict:
+    """Load YAML config with environment variable substitution"""
+    with open(config_path, 'r') as f:
+        content = f.read()
 
-                        # Face Detection (PGIE)
-                        {"type": "nvinfer", "name": "pgie",
-                         "config_file": "data/face/models/scrfd640/infer.txt"},
+    # Simple env var substitution: ${VAR:default}
+    import re
+    def replace_env(match):
+        var_expr = match.group(1)
+        if ':' in var_expr:
+            var_name, default = var_expr.split(':', 1)
+        else:
+            var_name, default = var_expr, ''
+        return os.environ.get(var_name, default)
 
-                        # Object Tracking
-                        {"type": "nvtracker", "name": "tracker",
-                         "config_file": "data/face/models/NvDCF/config_tracker.txt"},
-
-                        # Face Embedding (SGIE)
-                        {"type": "nvinfer", "name": "sgie",
-                         "config_file": "data/face/models/arcface/infer.txt"},
-
-                        # Output queue
-                        {"type": "queue", "properties": {"max-size-buffers": 3, "leaky": 2}},
-
-                        # Tiler for multiple cameras
-                        {"type": "nvmultistreamtiler", "name": "tiler",
-                         "properties": {"rows": 2, "columns": 2, "width": 1920, "height": 1080}},
-
-                        # Draw boxes and labels
-                        {"type": "nvdsosd", "properties": {"process-mode": 0, "display-text": 1}},
-
-                        # Convert for encoding
-                        {"type": "nvvideoconvert"},
-                    ]
-                },
-
-                # Branch 2: Simple Face Detection (PGIE only)
-                "detection": {
-                    "max_cameras": 8,
-                    "muxer": {
-                        "batch-size": 8,
-                        "batched-push-timeout": 40000,
-                        "width": 1920,
-                        "height": 1080,
-                        "live-source": 1,
-                        "nvbuf-memory-type": 0,
-                    },
-                    "elements": [
-                        # Queue for isolation
-                        {"type": "queue", "properties": {"max-size-buffers": 5, "leaky": 2}},
-
-                        # Face Detection (PGIE) - same model
-                        {"type": "nvinfer", "name": "pgie",
-                         "config_file": "data/face/models/scrfd640/infer.txt"},
-
-                        # Output queue
-                        {"type": "queue", "properties": {"max-size-buffers": 3, "leaky": 2}},
-
-                        # Tiler for multiple cameras
-                        {"type": "nvmultistreamtiler", "name": "tiler",
-                         "properties": {"rows": 2, "columns": 2, "width": 1920, "height": 1080}},
-
-                        # Draw boxes
-                        {"type": "nvdsosd", "properties": {"process-mode": 0, "display-text": 1}},
-
-                        # Convert for encoding
-                        {"type": "nvvideoconvert"},
-                    ]
-                }
-            }
-        }
-    }
+    content = re.sub(r'\$\{([^}]+)\}', replace_env, content)
+    return yaml.safe_load(content)
 
 
-async def main(api_port: int, output_dir: str):
+async def run_test_scenario(manager: MultibranchCameraManager, camera1_uri: str, camera2_uri: str):
+    """
+    Automated test scenario:
+      1. Add camera1 to recognition + detection
+      2. Wait 2s, add camera2 to recognition + detection
+      3. Wait 3s, remove camera1 from detection
+    """
+    print("\n" + "=" * 60)
+    print("AUTOMATED TEST SCENARIO")
+    print("=" * 60)
+
+    # Step 1: Add camera1 to both branches
+    print("\n[Step 1] Adding cam1 to recognition + detection...")
+    result = manager.add_camera("cam1", camera1_uri, ["recognition", "detection"])
+    print(f"  Result: {result}")
+
+    # Step 2: Wait 2s, then add camera2
+    print("\n[Step 2] Waiting 2 seconds...")
+    await asyncio.sleep(2)
+    print("  Adding cam2 to recognition + detection...")
+    result = manager.add_camera("cam2", camera2_uri, ["recognition", "detection"])
+    print(f"  Result: {result}")
+
+    # Step 3: Wait 3s, then remove camera1 from detection
+    print("\n[Step 3] Waiting 3 seconds...")
+    await asyncio.sleep(3)
+    print("  Removing cam1 from detection branch...")
+    result = manager.remove_camera_from_branch("cam1", "detection")
+    print(f"  Result: {result}")
+
+    print("\n" + "=" * 60)
+    print("TEST SCENARIO COMPLETE - Recording continues...")
+    print("=" * 60)
+    print("\nCurrent state:")
+    print(f"  - cam1: recognition only")
+    print(f"  - cam2: recognition + detection")
+    print("\nPress Ctrl+C to stop recording.\n")
+
+
+async def main(
+    config_path: str,
+    output_dir: str,
+    api_port: int,
+    camera1_uri: str,
+    camera2_uri: str,
+    auto_test: bool
+):
     """Main entry point"""
     print("=" * 60)
     print("Multi-Branch Pipeline Test with Video Output")
     print("=" * 60)
 
-    config = get_config()
+    # Load config
+    print(f"\n[Config] Loading: {config_path}")
+    config = load_yaml_config(config_path)
 
-    # Create sinks - using FakesinkAdapter for testing (FilesinkAdapter has memory issues)
+    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
+
+    # Create video output sinks
     sinks = {
-        "recognition": FakesinkAdapter(sync=False, name="sink_recognition"),
-        "detection": FakesinkAdapter(sync=False, name="sink_detection"),
+        "recognition": FilesinkAdapter(location=f"{output_dir}/output_recognition.avi"),
+        "detection": FilesinkAdapter(location=f"{output_dir}/output_detection.avi"),
     }
 
     print(f"\n[Setup] Building pipeline with 2 branches...")
@@ -187,7 +151,9 @@ async def main(api_port: int, output_dir: str):
     # Start API
     runner = await api.start()
 
-    # Start pipeline (FakesinkAdapter.start() is no-op)
+    # Start sinks
+    for sink in sinks.values():
+        sink.start()
 
     ret = pipeline.set_state(Gst.State.PLAYING)
     if ret == Gst.StateChangeReturn.FAILURE:
@@ -196,45 +162,33 @@ async def main(api_port: int, output_dir: str):
 
     print(f"\n[Running] Pipeline started!")
     print(f"\n" + "=" * 60)
-    print("API SERVER: http://localhost:{api_port}")
+    print(f"API SERVER: http://localhost:{api_port}")
     print("=" * 60)
-    print("""
-CURL Commands to test:
+
+    # Run automated test scenario
+    if auto_test:
+        asyncio.create_task(run_test_scenario(manager, camera1_uri, camera2_uri))
+    else:
+        print(f"""
+Manual mode - Use curl to add cameras:
 
 1. Add camera to BOTH branches:
-   curl -X POST http://localhost:{port}/api/cameras \\
+   curl -X POST http://localhost:{api_port}/api/cameras \\
         -H "Content-Type: application/json" \\
-        -d '{{"camera_id": "cam1", "uri": "file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4", "branches": ["recognition", "detection"]}}'
+        -d '{{"camera_id": "cam1", "uri": "{camera1_uri}", "branches": ["recognition", "detection"]}}'
 
-2. Add camera to RECOGNITION only:
-   curl -X POST http://localhost:{port}/api/cameras \\
-        -H "Content-Type: application/json" \\
-        -d '{{"camera_id": "cam2", "uri": "file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4", "branches": ["recognition"]}}'
+2. List cameras:
+   curl http://localhost:{api_port}/api/cameras
 
-3. List all cameras:
-   curl http://localhost:{port}/api/cameras
-
-4. List branches:
-   curl http://localhost:{port}/api/branches
-
-5. Remove camera from detection branch:
-   curl -X DELETE http://localhost:{port}/api/cameras/cam1/branches/detection
-
-6. Add camera to new branch:
-   curl -X POST http://localhost:{port}/api/cameras/cam1/branches/detection
-
-7. Remove camera entirely:
-   curl -X DELETE http://localhost:{port}/api/cameras/cam1
-
-8. Health check:
-   curl http://localhost:{port}/api/health
+3. Remove camera from detection:
+   curl -X DELETE http://localhost:{api_port}/api/cameras/cam1/branches/detection
 
 Output videos:
    - {output_dir}/output_recognition.avi
    - {output_dir}/output_detection.avi
 
 Press Ctrl+C to stop...
-""".format(port=api_port, output_dir=output_dir))
+""")
 
     # Wait for shutdown
     await stop_event.wait()
@@ -243,6 +197,9 @@ Press Ctrl+C to stop...
     print("\n[Cleanup] Stopping pipeline...")
     pipeline.set_state(Gst.State.NULL)
 
+    for sink in sinks.values():
+        sink.stop()
+
     await runner.cleanup()
 
     print(f"\n[Done] Output videos saved to {output_dir}/")
@@ -250,10 +207,28 @@ Press Ctrl+C to stop...
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Multi-Branch Pipeline Test")
-    parser.add_argument("--port", "-p", type=int, default=8080, help="API port (default: 8080)")
-    parser.add_argument("--output", "-o", default="/tmp/multi_branch_output", help="Output directory")
+    parser = argparse.ArgumentParser(description="Multi-Branch Pipeline Test with Video Output")
+    parser.add_argument("--config", "-c", default="configs/multi-branch.yaml",
+                        help="YAML config file (default: configs/multi-branch.yaml)")
+    parser.add_argument("--port", "-p", type=int, default=8080,
+                        help="API port (default: 8080)")
+    parser.add_argument("--output", "-o", default="/tmp/multi_branch_output",
+                        help="Output directory (default: /tmp/multi_branch_output)")
+    parser.add_argument("--camera1", default="file:///home/mq/disk2T/quangnv/face/data/videos/faceQuangnv3.mp4",
+                        help="Camera 1 URI")
+    parser.add_argument("--camera2", default="file:///home/mq/disk2T/quangnv/face/data/videos/faceQuangnv4.mp4",
+                        help="Camera 2 URI")
+    parser.add_argument("--manual", action="store_true",
+                        help="Manual mode - don't run automated test scenario")
+
     args = parser.parse_args()
 
     Gst.init(None)
-    sys.exit(asyncio.run(main(args.port, args.output)))
+    sys.exit(asyncio.run(main(
+        config_path=args.config,
+        output_dir=args.output,
+        api_port=args.port,
+        camera1_uri=args.camera1,
+        camera2_uri=args.camera2,
+        auto_test=not args.manual
+    )))
