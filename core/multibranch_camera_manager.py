@@ -89,7 +89,8 @@ class MultibranchCameraManager:
                 nvurisrcbin.set_property("uri", uri)
                 nvurisrcbin.set_property("gpu-id", 0)
                 nvurisrcbin.set_property("cudadec-memtype", 0)  # NVBUF_MEM_DEFAULT
-                nvurisrcbin.set_property("num-extra-surfaces", 2)
+                # Increase extra surfaces for multi-branch fanout to avoid buffer starvation
+                nvurisrcbin.set_property("num-extra-surfaces", 4)
 
                 # Create tee for fanout
                 tee = Gst.ElementFactory.make("tee", f"tee_{camera_id}")
@@ -135,16 +136,33 @@ class MultibranchCameraManager:
                 for branch_name in valid_branches:
                     branch = self.branches[branch_name]
 
-                    # Create queue for this branch connection
+                    # Create queue for this branch connection with larger buffer for stability
                     queue = Gst.ElementFactory.make("queue", f"q_{camera_id}_{branch_name}")
                     if not queue:
                         raise RuntimeError(f"Cannot create queue for {branch_name}")
 
-                    queue.set_property("max-size-buffers", 2)
+                    queue.set_property("max-size-buffers", 5)
                     queue.set_property("leaky", 2)  # Downstream leaky
                     bin_elem.add(queue)
 
-                    # Request tee src pad and link to queue
+                    # Create nvvideoconvert to copy buffers for this branch
+                    # This is critical for multi-branch: avoids double-free from shared NVMM buffers
+                    # nvbuf-memory-type=0 (NVMM default) ensures proper GPU buffer handling
+                    nvconv = Gst.ElementFactory.make("nvvideoconvert", f"nvconv_{camera_id}_{branch_name}")
+                    if not nvconv:
+                        raise RuntimeError(f"Cannot create nvvideoconvert for {branch_name}")
+                    nvconv.set_property("nvbuf-memory-type", 0)  # NVBUF_MEM_DEFAULT
+                    bin_elem.add(nvconv)
+
+                    # Create second queue after nvvideoconvert for isolation
+                    queue2 = Gst.ElementFactory.make("queue", f"q2_{camera_id}_{branch_name}")
+                    if not queue2:
+                        raise RuntimeError(f"Cannot create queue2 for {branch_name}")
+                    queue2.set_property("max-size-buffers", 5)
+                    queue2.set_property("leaky", 2)
+                    bin_elem.add(queue2)
+
+                    # Request tee src pad and link: tee -> queue -> nvvideoconvert -> queue2
                     tee_src = tee.request_pad_simple("src_%u")
                     if not tee_src:
                         raise RuntimeError("Cannot request tee src pad")
@@ -154,14 +172,20 @@ class MultibranchCameraManager:
                     if ret != Gst.PadLinkReturn.OK:
                         raise RuntimeError(f"Cannot link tee -> queue: {ret}")
 
-                    branch_queues[branch_name] = queue
+                    # Link queue -> nvvideoconvert -> queue2
+                    if not queue.link(nvconv):
+                        raise RuntimeError(f"Cannot link queue -> nvvideoconvert for {branch_name}")
+                    if not nvconv.link(queue2):
+                        raise RuntimeError(f"Cannot link nvvideoconvert -> queue2 for {branch_name}")
+
+                    branch_queues[branch_name] = queue2  # Store queue2 as the output element
                     branch_pads[branch_name] = tee_src
 
                 # 4. Add bin to pipeline
                 self.pipeline.add(bin_elem)
 
                 # 5. Create ghost pads and link to nvstreammux
-                for branch_name, queue in branch_queues.items():
+                for branch_name, queue2 in branch_queues.items():
                     branch = self.branches[branch_name]
                     mux = branch.nvstreammux
 
@@ -170,11 +194,11 @@ class MultibranchCameraManager:
                     if not mux_sink:
                         raise RuntimeError(f"Cannot request mux sink pad for {branch_name}")
 
-                    # Create ghost pad on bin
-                    queue_src = queue.get_static_pad("src")
+                    # Create ghost pad on bin (using queue2's src pad)
+                    queue2_src = queue2.get_static_pad("src")
                     self._ghost_pad_counter += 1
                     ghost_name = f"src_{branch_name}_{self._ghost_pad_counter}"
-                    ghost = Gst.GhostPad.new(ghost_name, queue_src)
+                    ghost = Gst.GhostPad.new(ghost_name, queue2_src)
                     bin_elem.add_pad(ghost)
 
                     # Link ghost pad to muxer
@@ -284,32 +308,49 @@ class MultibranchCameraManager:
                 return False
 
             try:
-                # 1. Create queue
+                # 1. Create queue with larger buffer for stability
                 queue = Gst.ElementFactory.make("queue", f"q_{camera_id}_{branch_name}")
-                queue.set_property("max-size-buffers", 2)
+                queue.set_property("max-size-buffers", 5)
                 queue.set_property("leaky", 2)
                 cam.bin.add(queue)
 
-                # 2. Request tee src pad and link to queue
+                # Create nvvideoconvert to copy buffers (critical for multi-branch)
+                nvconv = Gst.ElementFactory.make("nvvideoconvert", f"nvconv_{camera_id}_{branch_name}")
+                if not nvconv:
+                    raise RuntimeError(f"Cannot create nvvideoconvert for {branch_name}")
+                nvconv.set_property("nvbuf-memory-type", 0)
+                cam.bin.add(nvconv)
+
+                # Create second queue after nvvideoconvert for isolation
+                queue2 = Gst.ElementFactory.make("queue", f"q2_{camera_id}_{branch_name}")
+                queue2.set_property("max-size-buffers", 5)
+                queue2.set_property("leaky", 2)
+                cam.bin.add(queue2)
+
+                # 2. Request tee src pad and link: tee -> queue -> nvvideoconvert -> queue2
                 tee_src = cam.tee.request_pad_simple("src_%u")
                 queue_sink = queue.get_static_pad("sink")
                 tee_src.link(queue_sink)
+                queue.link(nvconv)
+                nvconv.link(queue2)
 
                 # 3. Create ghost pad and link to muxer
                 mux_sink = branch.nvstreammux.request_pad_simple(f"sink_{cam.source_id}")
-                queue_src = queue.get_static_pad("src")
+                queue2_src = queue2.get_static_pad("src")
 
                 self._ghost_pad_counter += 1
                 ghost_name = f"src_{branch_name}_{self._ghost_pad_counter}"
-                ghost = Gst.GhostPad.new(ghost_name, queue_src)
+                ghost = Gst.GhostPad.new(ghost_name, queue2_src)
                 cam.bin.add_pad(ghost)
                 ghost.link(mux_sink)
 
                 # 4. Sync state
                 queue.sync_state_with_parent()
+                nvconv.sync_state_with_parent()
+                queue2.sync_state_with_parent()
 
                 # 5. Update tracking
-                cam.branch_queues[branch_name] = queue
+                cam.branch_queues[branch_name] = queue2
                 cam.branch_pads[branch_name] = tee_src
 
                 logger.info(f"Camera {camera_id} added to branch '{branch_name}'")
@@ -367,7 +408,10 @@ class MultibranchCameraManager:
         """
         Internal: Unlink camera from specific branch
 
-        Releases muxer pad, removes ghost pad, removes queue, releases tee pad.
+        Releases muxer pad, removes ghost pad, removes all branch elements
+        (queue, nvvideoconvert, queue2), releases tee pad.
+
+        Element chain: tee -> queue -> nvvideoconvert -> queue2 -> ghost_pad -> muxer
         """
         if branch_name not in cam.branch_queues:
             return
@@ -376,7 +420,7 @@ class MultibranchCameraManager:
         if not branch:
             return
 
-        queue = cam.branch_queues[branch_name]
+        queue2 = cam.branch_queues[branch_name]
         tee_src = cam.branch_pads[branch_name]
 
         # Find and unlink ghost pad
@@ -390,9 +434,19 @@ class MultibranchCameraManager:
                 cam.bin.remove_pad(pad)
                 break
 
-        # Remove queue from bin
-        queue.set_state(Gst.State.NULL)
-        cam.bin.remove(queue)
+        # Get element names for this branch
+        queue_name = f"q_{cam.camera_id}_{branch_name}"
+        nvconv_name = f"nvconv_{cam.camera_id}_{branch_name}"
+
+        # Find queue and nvvideoconvert elements by name
+        queue = cam.bin.get_by_name(queue_name)
+        nvconv = cam.bin.get_by_name(nvconv_name)
+
+        # Remove all 3 elements in reverse order: queue2 -> nvconv -> queue
+        for elem in [queue2, nvconv, queue]:
+            if elem:
+                elem.set_state(Gst.State.NULL)
+                cam.bin.remove(elem)
 
         # Release tee src pad
         cam.tee.release_request_pad(tee_src)

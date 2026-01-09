@@ -10,6 +10,17 @@
 #   DELETE /api/cameras/{id} - Remove camera
 
 # =============================================================================
+# Recognition Settings (for recognition branch)
+# =============================================================================
+recognition:
+  features_json: "${FEATURES_JSON:/home/mq/disk2T/quangnv/face/data/face/features.json}"
+  l2_threshold: 1.0          # Max L2 distance for valid match
+  min_streak: 3              # Consecutive matches to confirm identity
+  skip_reid: 3               # Skip SGIE for N frames after last inference
+  reid_interval: 30          # Re-identify confirmed faces (~1s at 30fps)
+  min_face_size: 50          # Skip SGIE for faces smaller than NxN pixels
+
+# =============================================================================
 # Pipeline Definition
 # =============================================================================
 pipeline:
@@ -45,11 +56,15 @@ pipeline:
         - type: nvtracker
           name: tracker
           config_file: "${TRACKER_CONFIG:data/face/models/NvDCF/config_tracker.txt}"
+          probes:
+            src: tracker_probe
 
         # Face embedding (SGIE)
         - type: nvinfer
           name: sgie
           config_file: "${SGIE_CONFIG:data/face/models/arcface/infer.txt}"
+          probes:
+            src: sgie_probe
 
         # Output queue
         - type: queue
@@ -71,6 +86,8 @@ pipeline:
           properties:
             process-mode: 0
             display-text: 1
+          probes:
+            src: fps_probe
 
     # Branch 2: Face Detection Only (PGIE only, no tracking/recognition)
     detection:
