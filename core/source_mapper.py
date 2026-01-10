@@ -185,3 +185,11 @@ class SourceIDMapper:
         with self._lock:
             info = self._by_camera_id.get(camera_id)
             return info.source_id if info else None
+
+    def clear(self):
+        """Clear all mappings (for pipeline shutdown)"""
+        with self._lock:
+            self._by_camera_id.clear()
+            self._by_source_id.clear()
+            self._freed_ids.clear()
+            self._next_source_id = 0

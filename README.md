@@ -56,37 +56,74 @@ python3 stream.py
 
 ```
 FACE/
-├── cfg.py              # Pipeline configuration
-├── db.py               # Face database with caching
-├── track.py            # Face tracking and voting
-├── stream.py           # Main DeepStream pipeline
-├── signalling.py       # WebRTC signaling server
-├── view.html           # Browser-based viewer
-├── features.json       # Registered face features
-├── models/
-│   ├── arcface/        # Face recognition model
-│   ├── scrfd640/       # Face detection model
-│   └── NvDCF/          # Tracker configuration
+├── api/                     # REST API for camera management
+│   └── camera_api.py        # CRUD endpoints (aiohttp)
+├── apps/face/               # Face recognition application
+│   ├── database.py          # Feature DB with L2 matching
+│   ├── tracker.py           # Multi-track state machine (voting)
+│   ├── events.py            # Recognition events
+│   ├── display.py           # OSD rendering
+│   └── probes.py            # GStreamer probes
+├── core/                    # Pipeline framework
+│   ├── config.py            # YAML loader with env var expansion
+│   ├── tee_fanout_builder.py # Multi-branch pipeline builder
+│   ├── multibranch_camera_manager.py # Dynamic camera CRUD
+│   ├── camera_bin.py        # Camera container
+│   ├── probe_registry.py    # Probe registration system
+│   └── source_mapper.py     # Track source_id → camera mapping
+├── sinks/                   # Output adapters
+│   ├── base_sink.py         # Abstract interface
+│   ├── fakesink_adapter.py  # Testing sink
+│   ├── filesink_adapter.py  # MP4 recording
+│   └── webrtc/
+│       ├── webrtc_adapter.py  # WebRTC streaming + DataChannel
+│       └── signaling_server.py # WebSocket signaling
+├── bin/                     # Entry points
+│   ├── run_multi_branch.py  # Main: multi-branch pipeline + API
+│   ├── run_face_webrtc.py   # Single-branch face + WebRTC
+│   ├── test_*.py            # Integration tests
+├── configs/                 # Pipeline configurations
+│   ├── face-recognition.yaml  # Single-branch config
+│   ├── multi-camera.yaml      # Legacy multi-camera
+│   └── multi-branch.yaml      # Multi-branch tee architecture
+├── data/face/               # Models and features
+│   ├── models/
+│   │   ├── scrfd640/        # Face detection (PGIE)
+│   │   ├── arcface/         # Face recognition (SGIE)
+│   │   └── NvDCF/           # Tracker config
+│   └── features.json        # Registered face embeddings
 ├── scripts/
 │   ├── setup_7_1_jetson.sh  # Environment setup
-│   └── genkey.sh       # SSL certificate generation
-└── docs/               # Documentation
-    ├── project-overview-pdr.md
-    ├── codebase-summary.md
-    ├── code-standards.md
-    └── system-architecture.md
+│   └── genkey.sh            # SSL certificate generation
+└── docs/                    # Documentation
+    ├── project-overview-pdr.md   # PDR and requirements
+    ├── codebase-summary.md       # Module structure and data flow
+    ├── code-standards.md         # Coding conventions
+    └── system-architecture.md    # Architecture diagrams
 ```
 
 ## Architecture
 
+**Multi-Branch Tee Fanout** (single decode, zero-copy distribution):
+
 ```
-Video Source ──▶ DeepStream Pipeline ──▶ WebRTC ──▶ Browser
-                       │
-                       ├── SCRFD (Detection)
-                       ├── NvDCF (Tracking)
-                       ├── ArcFace (Recognition)
-                       └── DataChannel (Events)
+Camera → nvurisrcbin (decode) → tee → Branch A (Recognition) → WebRTC
+                                  ↘ Branch B (Detection) → File
+
+Pipeline Flow:
+  SCRFD (Detection) → NvDCF (Tracking) → ArcFace (Recognition) → Matching
+                                                                      ↓
+                                                          WebRTC DataChannel (Events)
 ```
+
+**Key Features**:
+- Dynamic camera add/remove via REST API
+- Multi-branch processing (recognition, detection, recording)
+- Hardware-accelerated buffer copying prevents inter-branch tearing
+- Streak-based identity confirmation (3+ consecutive matches)
+- Per-camera tracking isolation (no object_id collision)
+
+See [docs/system-architecture.md](docs/system-architecture.md) for detailed architecture diagrams.
 
 ## Configuration
 

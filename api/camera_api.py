@@ -9,6 +9,7 @@ Endpoints:
 - GET    /api/cameras                              - List all cameras
 - GET    /api/branches                             - List all branches
 - GET    /api/health                               - Health check
+- POST   /api/pipeline/kill                        - Remove all cameras
 """
 
 from __future__ import annotations
@@ -32,11 +33,13 @@ class CameraAPIServer:
         self,
         manager: "MultibranchCameraManager",
         host: str = "0.0.0.0",
-        port: int = 8080
+        port: int = 8080,
+        shutdown_event: asyncio.Event | None = None
     ):
         self.manager = manager
         self.host = host
         self.port = port
+        self.shutdown_event = shutdown_event
         self.app = web.Application()
         self._setup_routes()
 
@@ -49,6 +52,8 @@ class CameraAPIServer:
         self.app.router.add_get("/api/cameras", self.list_cameras)
         self.app.router.add_get("/api/branches", self.list_branches)
         self.app.router.add_get("/api/health", self.health_check)
+        self.app.router.add_post("/api/pipeline/kill", self.kill_pipeline)
+        self.app.router.add_post("/api/pipeline/stop", self.stop_pipeline)
 
     # === Camera CRUD ===
 
@@ -161,6 +166,31 @@ class CameraAPIServer:
             "cameras": self.manager.count(),
             "branches": list(self.manager.branches.keys())
         })
+
+    async def kill_pipeline(self, request: web.Request) -> web.Response:
+        """POST /api/pipeline/kill - Remove all cameras from pipeline"""
+        try:
+            count = self.manager.kill_all()
+            logger.info(f"API: Pipeline killed - {count} cameras removed")
+            return web.json_response({"status": "ok", "cameras_removed": count})
+        except Exception as e:
+            logger.exception(f"API error: {e}")
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def stop_pipeline(self, request: web.Request) -> web.Response:
+        """POST /api/pipeline/stop - Stop the entire pipeline (triggers shutdown)"""
+        try:
+            self.manager.kill_all()
+            if self.shutdown_event:
+                self.shutdown_event.set()
+                logger.info("API: Pipeline stop signaled")
+                return web.json_response({"status": "ok", "message": "Pipeline shutdown initiated"})
+            else:
+                logger.warning("API: No shutdown event configured")
+                return web.json_response({"error": "Shutdown not configured", "cameras_removed": self.manager.count()}, status=400)
+        except Exception as e:
+            logger.exception(f"API error: {e}")
+            return web.json_response({"error": str(e)}, status=500)
 
     # === Server Control ===
 

@@ -32,6 +32,9 @@ Then use curl to add cameras:
     # Remove camera entirely
     curl -X DELETE http://localhost:8080/api/cameras/cam1
 
+    # Kill all cameras (remove all)
+    curl -X POST http://localhost:8080/api/pipeline/kill
+
 Output videos:
     - output_recognition.avi: Full face recognition with names
     - output_detection.avi: Simple face detection boxes
@@ -93,10 +96,7 @@ async def main(config_path: str, api_port: int, output_dir: str):
     # Create camera manager
     manager = MultibranchCameraManager(pipeline, builder.branches)
 
-    # Create API server
-    api = CameraAPIServer(manager, port=api_port)
-
-    # Shutdown handling
+    # Shutdown handling (must be created before API server)
     stop_event = asyncio.Event()
 
     def on_shutdown(sig):
@@ -106,6 +106,9 @@ async def main(config_path: str, api_port: int, output_dir: str):
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda s=sig: on_shutdown(s))
+
+    # Create API server with shutdown event
+    api = CameraAPIServer(manager, port=api_port, shutdown_event=stop_event)
 
     # Start API
     runner = await api.start()
@@ -151,7 +154,13 @@ CURL Commands to test:
 7. Remove camera entirely:
    curl -X DELETE http://localhost:{port}/api/cameras/cam1
 
-8. Health check:
+8. KILL ALL cameras (remove all):
+   curl -X POST http://localhost:{port}/api/pipeline/kill
+
+9. STOP pipeline (shutdown entire application):
+   curl -X POST http://localhost:{port}/api/pipeline/stop
+
+10. Health check:
    curl http://localhost:{port}/api/health
 
 Output videos:

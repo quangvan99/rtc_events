@@ -26,7 +26,7 @@ curl -X POST 'http://localhost:9001/api/v1/stream/remove' \
 
 
   # Start pipeline with API
-  python bin/run_multi_branch.py --config configs/multi-branch.yaml --port 8080
+  python bin/run_multi_branch.py --config configs/multi-branch.yaml --port 8080 /home/mq/disk2T/quangnv/face/data
 
   # Add camera via API
   curl -X POST http://localhost:8080/api/cameras \
@@ -120,3 +120,44 @@ tao 1 file test 1 pipeline chạy sẵn 2 bài toán:
 sau do toi se tu curl camera (nho huong dan toi su dung api curl de CRUD camera vao branch)
 
  sua lai bin/test_multi_branch_video.py su dung file yaml  
+
+
+
+
+use the Docker **face-stream**, sau do cd /home/mq/disk2T/quangnv/face to debug, dev and fix. 
+python3 bin/test_multi_branch_video.py 
+
+● # Step 1: Add cam1 to recognition + detection
+curl -X POST http://localhost:8083/api/cameras \
+      -H "Content-Type: application/json" \
+      -d '{"camera_id": "cam1", "uri": "rtsp://192.168.6.14:8554/testface", "branches": ["recognition", "detection"]}'
+
+# Step 2: Wait 2s, then add cam2 to recognition + detection
+sleep 2
+curl -X POST http://localhost:8083/api/cameras \
+      -H "Content-Type: application/json" \
+      -d '{"camera_id": "cam2", "uri": "rtsp://192.168.6.14:8554/test", "branches": ["recognition", "detection"]}'
+
+# Step 3: Wait 3s, then remove cam1 from detection branch
+sleep 3
+curl -X DELETE http://localhost:8083/api/cameras/cam2/branches/detection
+
+curl -X POST http://localhost:8083/api/cameras \
+      -H "Content-Type: application/json" \
+      -d '{"camera_id": "cam3", "uri": "rtsp://192.168.6.14:8554/test", "branches": ["recognition", "detection"]}'
+
+thỉnh thoảng Segmentation fault (core dumped) ở 1 số step nào đó. Có thể do cach ở gstream gì đó, hãy ultrathink và check thật kỹ
+Hay tu debug va Test cho toi kich ban tren. Dam bao add va Delete dc camera. Toi moi test sang step 1 nhung da bi segmetation fault roi 
+luu y: de debug, dev and fix.  thi docker exec -it face-stream bash, cd                       
+  /home/mq/disk2T/quangnv/face. Sau do moi chay python3      
+  bin/test_multi_branch_video.py 
+
+ffmpeg -i /home/mq/disk2T/quangnv/face/data/output_detection.avi -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k /home/mq/disk2T/quangnv/face/data/output_detection.mp4
+ffmpeg -i /home/mq/disk2T/quangnv/face/data/output_recognition.avi -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k /home/mq/disk2T/quangnv/face/data/output_recognition.mp4
+
+Usage:
+# Remove all cameras (keep pipeline running)
+curl -X POST http://localhost:8083/api/pipeline/kill
+
+# Stop the entire pipeline (shutdown application)
+curl -X POST http://localhost:8083/api/pipeline/stop
