@@ -29,6 +29,8 @@ class CameraBin:
         branch_queues: Mapping branch_name -> queue element
         branch_pads: Mapping branch_name -> tee src pad
         source_id: DeepStream source ID for this camera
+        pad_added_handler: Signal handler ID for pad-added signal
+        active_probes: List of active pad probe IDs
     """
     camera_id: str
     uri: str
@@ -38,6 +40,8 @@ class CameraBin:
     branch_queues: dict[str, "Gst.Element"] = field(default_factory=dict)
     branch_pads: dict[str, "Gst.Pad"] = field(default_factory=dict)
     source_id: int = 0
+    pad_added_handler: int = 0
+    active_probes: list = field(default_factory=list)
 
     def get_branches(self) -> list[str]:
         """Get list of branch names this camera is connected to"""

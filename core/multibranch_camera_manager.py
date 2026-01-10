@@ -91,7 +91,7 @@ class MultibranchCameraManager:
                 nvurisrcbin.set_property("cudadec-memtype", 0)  # NVBUF_MEM_DEFAULT
                 # Increase extra surfaces for multi-branch fanout to avoid buffer starvation
                 # Higher value (8) needed for 2+ branches with nvvideoconvert in each
-                nvurisrcbin.set_property("num-extra-surfaces", 4)
+                nvurisrcbin.set_property("num-extra-surfaces", 2)
 
                 # Create tee for fanout
                 tee = Gst.ElementFactory.make("tee", f"tee_{camera_id}")

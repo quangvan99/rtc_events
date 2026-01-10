@@ -123,6 +123,7 @@ sau do toi se tu curl camera (nho huong dan toi su dung api curl de CRUD camera 
 
 
 
+docker exec -i face-stream bash -c "cd /home/mq/disk2T/quangnv/face && pkill -9 -f test_multi_branch_video 2>/dev/null; sleep 2; echo 'Killed all processes'"
 
 use the Docker **face-stream**, sau do cd /home/mq/disk2T/quangnv/face to debug, dev and fix. 
 python3 bin/test_multi_branch_video.py 
@@ -146,7 +147,9 @@ curl -X POST http://localhost:8083/api/cameras \
       -H "Content-Type: application/json" \
       -d '{"camera_id": "cam3", "uri": "rtsp://192.168.6.14:8554/test", "branches": ["recognition", "detection"]}'
 
-thỉnh thoảng Segmentation fault (core dumped) ở 1 số step nào đó. Có thể do cach ở gstream gì đó, hãy ultrathink và check thật kỹ
+Kill process cu vaf Test lai voi kich ban tren thỉnh thoảng free(): unaligned chunk detected in tcache 2 hoặc Segmentation fault (core dumped) ở 1 số step nào đó, hoặc thỉnh thoảng chạy rất mượt. Có thể do ở gstream gì đó, hãy ultrathink và check thật kỹ
+ngoai ra khong test vs video mà test bang rtsp truoc tranh bị loi queue, do khong dong bo duoc cac branch voi nhau
+
 Hay tu debug va Test cho toi kich ban tren. Dam bao add va Delete dc camera. Toi moi test sang step 1 nhung da bi segmetation fault roi 
 luu y: de debug, dev and fix.  thi docker exec -it face-stream bash, cd                       
   /home/mq/disk2T/quangnv/face. Sau do moi chay python3      
@@ -161,3 +164,6 @@ curl -X POST http://localhost:8083/api/pipeline/kill
 
 # Stop the entire pipeline (shutdown application)
 curl -X POST http://localhost:8083/api/pipeline/stop
+
+
+Ultrathink Phân tích và hãy refactor lai code core/multibranch_camera_manager.py
