@@ -125,7 +125,8 @@ class TeeFanoutPipelineBuilder:
 
                 if sink_cfg:
                     sink_type = sink_cfg.get("type", output_type)
-                    location = sink_cfg.get("location")
+                    properties = sink_cfg.get("properties", {})
+                    location = properties.get("location")
                 else:
                     sink_type = output_type
                     location = f"{output_dir}/{prefix}_{name}.{extension}" if sink_type == "filesink" else None

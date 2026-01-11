@@ -31,7 +31,7 @@ if lsof -i :$PORT 2>/dev/null; then
 fi
 
 # Remove old output files
-rm -f $PROJECT_DIR/data/output_*.avi 2>/dev/null || true
+rm -f $PROJECT_DIR/data/face/output_*.avi 2>/dev/null || true
 
 # Function to check if server is healthy
 check_health() {
@@ -137,7 +137,7 @@ echo "=== Wait 10s for video processing ==="
 sleep 10
 
 echo "=== Video Files ==="
-ls -lh "$PROJECT_DIR/data/output_*.avi" 2>/dev/null || echo "No output files"
+ls -lh "$PROJECT_DIR/data/face/output_*.avi" 2>/dev/null || echo "No output files"
 
 echo ""
 echo "=== Log (last 30 lines) ==="

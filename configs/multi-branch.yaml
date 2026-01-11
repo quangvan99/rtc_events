@@ -1,23 +1,16 @@
 # =============================================================================
-# Multi-Branch Pipeline Configuration
+# Global Settings (Common)
 # =============================================================================
-# Architecture:
-#   Camera -> nvurisrcbin -> tee -> queue -> nvstreammux (Branch A) -> elements -> filesink
-#                               -> queue -> nvstreammux (Branch B) -> elements -> filesink
-#
-# Each branch saves video to: {output.dir}/{output.prefix}_{branch_name}.avi
-# =============================================================================
-
-# =============================================================================
-# Face Recognition Settings (for recognition branch)
-# =============================================================================
-recognition:
-  features_json: "${FEATURES_JSON:/home/mq/disk2T/quangnv/face/data/face/features.json}"
-  l2_threshold: 1.0          # Max L2 distance for valid match
-  min_streak: 3              # Consecutive matches to confirm identity
-  skip_reid: 3               # Skip SGIE for N frames after last inference
-  reid_interval: 30          # Re-identify confirmed faces (~1s at 30fps)
-  min_face_size: 50          # Skip SGIE for faces smaller than NxN pixels
+common:
+  camera_api:
+    host: "${API_HOST:0.0.0.0}"
+    port: "${API_PORT:8083}"
+  
+  # Cấu hình Face Rec cho thuật toán (không liên quan pipeline)
+  recognition_params:
+    features_json: "${FEATURES_JSON:data/face/features.json}"
+    l2_threshold: 1.0
+    min_streak: 3
 
 # =============================================================================
 # Pipeline Definition
@@ -25,147 +18,84 @@ recognition:
 pipeline:
   name: multi-branch-tee-pipeline
 
-  # Branch definitions - each branch has independent nvstreammux
   branches:
-
     # -----------------------------------------------------------------------
-    # Branch 1: Face Recognition (PGIE + tracker + SGIE + tiler + osd)
-    # Output: {output.dir}/output_recognition.avi (or override below)
+    # Branch 1: Face Recognition -> Lưu ra file AVI
     # -----------------------------------------------------------------------
     recognition:
       max_cameras: 8
-
-      # Optional: Override output for this branch
-      # sink:
-      #   type: fakesink      # Use fakesink to discard output
-      #   location: /home/mq/disk2T/quangnv/face/data/my_recognition.avi  # Custom file
+      
+      # [NEW] Định nghĩa Sink (Output) rõ ràng tại đây
+      sink:
+        enable: true
+        type: filesink   # Các loại: filesink, fakesink, rtsp, display
+        properties:
+          location: "${OUTPUT_DIR:data/face/output_recognition.avi}"
+          sync: false
+          qos: false
+          # Nếu dùng rtsp thì thêm port, bitrate, v.v. ở đây
 
       muxer:
         batch-size: 8
-        batched-push-timeout: 40000
         width: 1920
         height: 1080
-        live-source: 1
         nvbuf-memory-type: 0
+        batched-push-timeout: 40000
+        live-source: 1
 
       elements:
         - type: queue
-          properties:
-            max-size-buffers: 5
-            leaky: 2
-
         - type: nvinfer
           name: pgie
-          config_file: "${PGIE_CONFIG:data/face/models/scrfd640/infer.txt}"
-
+          config_file: "data/face/models/scrfd640/infer.txt"
         - type: nvtracker
           name: tracker
-          config_file: "${TRACKER_CONFIG:data/face/models/NvDCF/config_tracker.txt}"
-          probes:
-            src: tracker_probe
-
+          config_file: "data/face/models/NvDCF/config_tracker.txt"
         - type: nvinfer
           name: sgie
-          config_file: "${SGIE_CONFIG:data/face/models/arcface/infer.txt}"
-          probes:
-            src: sgie_probe
-
-        - type: queue
-          properties:
-            max-size-buffers: 3
-            leaky: 2
-
+          config_file: "data/face/models/arcface/infer.txt"
         - type: nvmultistreamtiler
-          name: tiler
-          properties:
-            rows: 2
-            columns: 2
-            width: 1920
-            height: 1080
-
+          properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
         - type: nvdsosd
-          properties:
-            process-mode: 0
-            display-text: 1
-          probes:
-            src: fps_probe
+          properties: { process-mode: 0, display-text: 1 }
 
     # -----------------------------------------------------------------------
-    # Branch 2: Face Detection Only (PGIE only)
-    # Output: {output.dir}/output_detection.avi (or override below)
+    # Branch 2: Face Detection -> Ví dụ: Stream RTSP (Khác với bên trên)
     # -----------------------------------------------------------------------
     detection:
       max_cameras: 8
 
-      # Optional: Override output for this branch
+      # [NEW] Output khác hoàn toàn so với branch 1
+      sink:
+        enable: true
+        type: filesink   # Các loại: filesink, fakesink, rtsp, display
+        properties:
+          location: "${OUTPUT_DIR:data/face/output_detection.avi}"
+          sync: false
+          qos: false
+          # Nếu dùng rtsp thì thêm port, bitrate, v.v. ở đây
+
+      
+      # Hoặc nếu muốn lưu file thì đổi lại thành filesink như trên:
       # sink:
-      #   type: fakesink      # Use fakesink to discard output
-      #   location: /home/mq/disk2T/quangnv/face/data/my_detection.mp4  # Custom file
+      #   type: filesink
+      #   properties:
+      #     location: "data/output_detection.mp4"
 
       muxer:
         batch-size: 8
-        batched-push-timeout: 40000
         width: 1920
         height: 1080
-        live-source: 1
         nvbuf-memory-type: 0
+        batched-push-timeout: 40000
+        live-source: 1
 
       elements:
         - type: queue
-          properties:
-            max-size-buffers: 5
-            leaky: 2
-
         - type: nvinfer
           name: pgie
-          config_file: "${PGIE_CONFIG:data/face/models/scrfd640/infer.txt}"
-
-        - type: queue
-          properties:
-            max-size-buffers: 3
-            leaky: 2
-
+          config_file: "data/face/models/scrfd640/infer.txt"
         - type: nvmultistreamtiler
-          name: tiler
-          properties:
-            rows: 2
-            columns: 2
-            width: 1920
-            height: 1080
-
+          properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
         - type: nvdsosd
-          properties:
-            process-mode: 0
-            display-text: 1
-
-# =============================================================================
-# Video Output Configuration
-# =============================================================================
-# Each branch can use different sink type: filesink, fakesink, webrtc, etc.
-#
-# Output file naming: {dir}/{prefix}_{branch_name}.{extension}
-#
-# Examples:
-#   filesink: {dir}/output_recognition.avi
-#   fakesink: No output file (discard frames)
-#
-# Override per branch in branch config:
-#   recognition:
-#     sink:
-#       type: filesink
-#       location: /path/to/recognition.avi
-# =============================================================================
-output:
-  dir: "${OUTPUT_DIR:/home/mq/disk2T/quangnv/face/data}"
-  prefix: "output"
-  extension: "avi"
-  type: "${OUTPUT_TYPE:filesink}"
-  sync: false
-
-# =============================================================================
-# Camera REST API Configuration
-# =============================================================================
-camera_api:
-  host: "${API_HOST:0.0.0.0}"
-  port: "${API_PORT:8083}"
-
+          properties: { process-mode: 0, display-text: 1 }
