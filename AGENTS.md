@@ -4,6 +4,284 @@
 
 This is a **DeepStream-based face recognition streaming system** for NVIDIA Jetson platforms. The codebase uses GStreamer/Python bindings with aiohttp for REST APIs and WebRTC for streaming.
 
+---
+
+## Available Agents
+
+OpenCode supports the following agent types:
+
+| Agent Type | Description | Use Case |
+|------------|-------------|----------|
+| `general` | General-purpose agent for multi-step tasks | Complex development tasks, refactoring, debugging |
+| `explore` | Fast agent for codebase exploration | Finding files, searching code, understanding structure |
+
+### Agent Usage
+
+```python
+from agents import general, explore
+
+# Launch general agent for complex tasks
+result = general.run(
+    prompt="Refactor the camera manager to use async/await",
+    description="Refactor camera manager"
+)
+
+# Launch explore agent for searching
+files = explore.run(
+    prompt="Find all files related to face recognition",
+    description="Find face recognition files"
+)
+```
+
+---
+
+## Available Skills
+
+The following skills are available for use with OpenCode:
+
+### Core Development Skills
+
+| Skill Name | Description |
+|------------|-------------|
+| `planning` | Plan technical solutions that are scalable, secure, and maintainable |
+| `research` | Research and analyze technical solutions |
+| `Debugging` | Systematic debugging framework with root cause investigation |
+| `code-review` | Code review with technical rigor and verification gates |
+| `backend-development` | Build robust backend systems with modern technologies |
+| `frontend-dev-guidelines` | Frontend development guidelines for React/TypeScript |
+
+### Specialized Skills
+
+| Skill Name | Description |
+|------------|-------------|
+| `web-frameworks` | Build full-stack web applications with Next.js, Turborepo |
+| `ui-styling` | Create beautiful UIs with shadcn/ui, Tailwind CSS |
+| `ui-ux-pro-max` | UI/UX design intelligence with 50+ styles |
+| `frontend-design` | Production-grade frontend interfaces |
+| `frontend-design-pro` | High-quality interfaces with real images |
+| `threejs` | Build 3D web experiences with Three.js |
+| `mobile-development` | Build mobile apps with React Native, Flutter |
+| `docs-seeker` | Search technical documentation |
+| `media-processing` | Process multimedia with FFmpeg, ImageMagick |
+| `databases` | Work with MongoDB and PostgreSQL |
+| `devops` | Deploy to Cloudflare, Docker, GCP |
+| `ai-multimodal` | Process and generate multimedia with Google Gemini |
+| `chrome-devtools` | Browser automation and debugging |
+| `dev-browser` | Browser automation with persistent state |
+| `payment-integration` | Implement payment with SePay and Polar |
+| `shopify` | Build Shopify applications |
+| `better-auth` | Authentication with Better Auth framework |
+| `mcp-builder` | Create MCP servers |
+| `mcp-management` | Manage MCP servers |
+
+### Productivity Skills
+
+| Skill Name | Description |
+|------------|-------------|
+| `repomix` | Package codebases into AI-friendly files |
+| `aesthetic` | Create aesthetically beautiful interfaces |
+| `pptx` | Create and edit presentations |
+| `xlsx` | Create and edit spreadsheets |
+| `pdf` | Manipulate PDF documents |
+| `docx` | Create and edit Word documents |
+
+### Advanced Skills
+
+| Skill Name | Description |
+|------------|-------------|
+| `sequential-thinking` | Structured problem-solving for complex tasks |
+| `skill-creator` | Create custom skills |
+| `template-skill` | Skill creation guide |
+| `websearch` | Real-time web search |
+| `codesearch` | Search code APIs and libraries |
+
+### Skill Usage
+
+```python
+from skills import planning, Debugging, web_frameworks
+
+# Use planning skill
+plan = planning.run(
+    query="Design a scalable REST API for camera management"
+)
+
+# Use debugging skill
+Debugging.run(
+    command="Investigate memory leak in camera pipeline",
+    description="Debug memory leak"
+)
+
+# Use web-frameworks skill
+result = web_frameworks.run(
+    query="Next.js App Router with Server Components example"
+)
+```
+
+---
+
+## Configuration Examples
+
+### Using Agents with Context
+
+```python
+from agents import general
+
+general.run(
+    prompt="""Analyze the face recognition pipeline and:
+1. Identify performance bottlenecks
+2. Suggest optimization strategies
+3. Implement one optimization""",
+    description="Optimize face recognition pipeline",
+    context={
+        "project_root": "/home/mq/disk2T/quangnv/face",
+        "focus_areas": ["apps/face/", "core/"]
+    }
+)
+```
+
+### Chaining Skills
+
+```python
+from skills import research, planning, web_frameworks
+
+# Research phase
+docs = research.run(query="DeepStream Python bindings best practices")
+
+# Planning phase
+plan = planning.run(query="Design pattern for multi-camera GStreamer pipeline")
+
+# Implementation phase
+result = web_frameworks.run(query="Python asyncio with GStreamer integration")
+```
+
+---
+
+## Quick Command Aliases
+
+Create shell aliases for fast agent/skill access:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+
+# Agent shortcuts
+alias oa='python3 /home/mq/disk2T/quangnv/face/bin/opencode_agent.py'
+alias oa-explore='python3 /home/mq/disk2T/quangnv/face/bin/opencode_agent.py --agent explore'
+alias oa-general='python3 /home/mq/disk2T/quangnv/face/bin/opencode_agent.py --agent general'
+
+# Skill shortcuts
+alias os-plan='python3 /home/mq/disk2T/quangnv/face/bin/opencode_skill.py --skill planning'
+alias os-debug='python3 /home/mq/disk2T/quangnv/face/bin/opencode_skill.py --skill debugging'
+alias os-search='python3 /home/mq/disk2T/quangnv/face/bin/opencode_skill.py --skill codesearch'
+alias os-websearch='python3 /home/mq/disk2T/quangnv/face/bin/opencode_skill.py --skill websearch'
+```
+
+### Quick Command Scripts
+
+Create `/home/mq/disk2T/quangnv/face/bin/opencode_agent.py`:
+
+```python
+#!/usr/bin/env python3
+"""
+Quick agent launcher for OpenCode
+Usage: python3 bin/opencode_agent.py --agent explore --prompt "Find face files"
+"""
+
+import argparse
+import sys
+sys.path.insert(0, '/home/mq/disk2T/quangnv/face')
+
+from agents import general, explore
+
+def main():
+    parser = argparse.ArgumentParser(description='OpenCode Quick Agent')
+    parser.add_argument('--agent', choices=['general', 'explore'], required=True)
+    parser.add_argument('--prompt', required=True)
+    parser.add_argument('--description', default='Quick task')
+    
+    args = parser.parse_args()
+    
+    if args.agent == 'general':
+        result = general.run(prompt=args.prompt, description=args.description)
+    else:
+        result = explore.run(prompt=args.prompt, description=args.description)
+    
+    print(result)
+
+if __name__ == '__main__':
+    main()
+```
+
+Create `/home/mq/disk2T/quangnv/face/bin/opencode_skill.py`:
+
+```python
+#!/usr/bin/env python3
+"""
+Quick skill launcher for OpenCode
+Usage: python3 bin/opencode_skill.py --skill planning --query "Design API"
+"""
+
+import argparse
+import sys
+sys.path.insert(0, '/home/mq/disk2T/quangnv/face')
+
+from skills import (
+    planning, research, Debugging, code_review,
+    websearch, codesearch, web_frameworks,
+    media_processing, databases, devops
+)
+
+SKILL_MAP = {
+    'planning': planning,
+    'research': research,
+    'debugging': Debugging,
+    'code-review': code_review,
+    'websearch': websearch,
+    'codesearch': codesearch,
+    'web-frameworks': web_frameworks,
+    'media-processing': media_processing,
+    'databases': databases,
+    'devops': devops,
+}
+
+def main():
+    parser = argparse.ArgumentParser(description='OpenCode Quick Skill')
+    parser.add_argument('--skill', choices=SKILL_MAP.keys(), required=True)
+    parser.add_argument('--query', required=True)
+    
+    args = parser.parse_args()
+    
+    skill = SKILL_MAP[args.skill]
+    result = skill.run(query=args.query)
+    print(result)
+
+if __name__ == '__main__':
+    main()
+```
+
+### Make scripts executable
+
+```bash
+chmod +x /home/mq/disk2T/quangnv/face/bin/opencode_agent.py /home/mq/disk2T/quangnv/face/bin/opencode_skill.py
+```
+
+### Usage Examples
+
+```bash
+# Quick explore
+python3 /home/mq/disk2T/quangnv/face/bin/opencode_agent.py --agent explore --prompt "Find all Python files in apps/face/" --description="Find face files"
+
+# Quick planning
+python3 /home/mq/disk2T/quangnv/face/bin/opencode_skill.py --skill planning --query "Design REST API for camera management"
+
+# Quick web search
+python3 /home/mq/disk2T/quangnv/face/bin/opencode_skill.py --skill websearch --query "GStreamer Python bindings 2024"
+
+# Quick code search
+python3 /home/mq/disk2T/quangnv/face/bin/opencode_skill.py --skill codesearch --query "Python dataclass examples"
+```
+
+---
+
 ## Docker Environment
 
 **Always use Docker container `face-stream` for development:**

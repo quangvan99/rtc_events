@@ -10,18 +10,22 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING, Optional
 
 import gi
 
 gi.require_version("Gst", "1.0")
-from gi.repository import Gst
+from gi.repository import Gst, GLib
 
 from core.camera_bin import CameraBin
 from core.tee_fanout_builder import BranchInfo
 from core.source_mapper import SourceIDMapper
 
 logger = logging.getLogger(__name__)
+
+# Minimum delay between camera operations to let pipeline stabilize
+MIN_OP_DELAY = 2.0
 
 
 class MultibranchCameraManager:
@@ -47,7 +51,9 @@ class MultibranchCameraManager:
         self._cameras: dict[str, CameraBin] = {}
         self._mapper = SourceIDMapper()
         self._lock = threading.Lock()
+        self._op_lock = threading.Lock()  # Serialize camera operations
         self._ghost_pad_counter = 0  # For unique ghost pad naming
+        self._last_op_time = 0.0  # Track last operation time
 
     def add_camera(self, camera_id: str, uri: str, branch_names: list[str]) -> bool:
         """
@@ -63,161 +69,174 @@ class MultibranchCameraManager:
         Returns:
             True if successful, False if camera_id exists or no valid branches
         """
-        with self._lock:
-            if camera_id in self._cameras:
-                logger.warning(f"Camera already exists: {camera_id}")
-                return False
+        # Serialize operations and enforce minimum delay
+        with self._op_lock:
+            elapsed = time.time() - self._last_op_time
+            if elapsed < MIN_OP_DELAY:
+                time.sleep(MIN_OP_DELAY - elapsed)
 
-            # Filter valid branches
-            valid_branches = [b for b in branch_names if b in self.branches]
-            if not valid_branches:
-                logger.error(f"No valid branches for camera {camera_id}: {branch_names}")
-                return False
+            with self._lock:
+                if camera_id in self._cameras:
+                    logger.warning(f"Camera already exists: {camera_id}")
+                    return False
 
-            try:
-                # Allocate source_id
-                source_id = self._mapper.add(camera_id, uri)
+                # Filter valid branches
+                valid_branches = [b for b in branch_names if b in self.branches]
+                if not valid_branches:
+                    logger.error(f"No valid branches for camera {camera_id}: {branch_names}")
+                    return False
 
-                # 1. Create camera bin
-                bin_elem = Gst.Bin.new(f"camera_bin_{camera_id}")
+                try:
+                    # Allocate source_id
+                    source_id = self._mapper.add(camera_id, uri)
 
-                # Create nvurisrcbin for decoding
-                nvurisrcbin = Gst.ElementFactory.make("nvurisrcbin", f"src_{camera_id}")
-                if not nvurisrcbin:
-                    raise RuntimeError("Cannot create nvurisrcbin")
+                    # 1. Create camera bin
+                    bin_elem = Gst.Bin.new(f"camera_bin_{camera_id}")
 
-                nvurisrcbin.set_property("uri", uri)
-                nvurisrcbin.set_property("gpu-id", 0)
-                nvurisrcbin.set_property("cudadec-memtype", 0)  # NVBUF_MEM_DEFAULT
-                # Increase extra surfaces for multi-branch fanout to avoid buffer starvation
-                # Higher value (8) needed for 2+ branches with nvvideoconvert in each
-                nvurisrcbin.set_property("num-extra-surfaces", 2)
+                    # Create nvurisrcbin for decoding
+                    nvurisrcbin = Gst.ElementFactory.make("nvurisrcbin", f"src_{camera_id}")
+                    if not nvurisrcbin:
+                        raise RuntimeError("Cannot create nvurisrcbin")
 
-                # Create tee for fanout
-                tee = Gst.ElementFactory.make("tee", f"tee_{camera_id}")
-                if not tee:
-                    raise RuntimeError("Cannot create tee")
-                tee.set_property("allow-not-linked", True)
+                    nvurisrcbin.set_property("uri", uri)
+                    nvurisrcbin.set_property("gpu-id", 0)
+                    nvurisrcbin.set_property("cudadec-memtype", 0)  # NVBUF_MEM_DEFAULT
+                    # Increase extra surfaces for multi-camera multi-branch to avoid buffer starvation
+                    nvurisrcbin.set_property("num-extra-surfaces", 4)
 
-                bin_elem.add(nvurisrcbin)
-                bin_elem.add(tee)
+                    # Create tee for fanout
+                    tee = Gst.ElementFactory.make("tee", f"tee_{camera_id}")
+                    if not tee:
+                        raise RuntimeError("Cannot create tee")
+                    tee.set_property("allow-not-linked", True)
 
-                # Fakesink for audio - needed to prevent not-linked errors
-                audio_fakesink = Gst.ElementFactory.make("fakesink", f"audio_fake_{camera_id}")
-                audio_fakesink.set_property("sync", False)
-                audio_fakesink.set_property("async", False)
-                bin_elem.add(audio_fakesink)
+                    bin_elem.add(nvurisrcbin)
+                    bin_elem.add(tee)
 
-                # 3. Create queues and link to branches FIRST
-                # This must be done BEFORE connecting pad-added callback to prevent race
-                branch_queues = {}
-                branch_pads = {}
+                    # Fakesink for audio - needed to prevent not-linked errors
+                    audio_fakesink = Gst.ElementFactory.make("fakesink", f"audio_fake_{camera_id}")
+                    audio_fakesink.set_property("sync", False)
+                    audio_fakesink.set_property("async", False)
+                    bin_elem.add(audio_fakesink)
 
-                for branch_name in valid_branches:
-                    branch = self.branches[branch_name]
+                    # 3. Create queues and link to branches FIRST
+                    # This must be done BEFORE connecting pad-added callback to prevent race
+                    branch_queues = {}
+                    branch_pads = {}
 
-                    # Create queue for this branch connection
-                    queue = Gst.ElementFactory.make("queue", f"q_{camera_id}_{branch_name}")
-                    if not queue:
-                        raise RuntimeError(f"Cannot create queue for {branch_name}")
+                    for branch_name in valid_branches:
+                        branch = self.branches[branch_name]
 
-                    queue.set_property("max-size-buffers", 30)
-                    queue.set_property("max-size-bytes", 0)
-                    queue.set_property("max-size-time", 0)
-                    queue.set_property("leaky", 2)
-                    bin_elem.add(queue)
+                        # Create queue for this branch connection
+                        queue = Gst.ElementFactory.make("queue", f"q_{camera_id}_{branch_name}")
+                        if not queue:
+                            raise RuntimeError(f"Cannot create queue for {branch_name}")
 
-                    # Create nvvideoconvert for buffer isolation
-                    nvconv = Gst.ElementFactory.make("nvvideoconvert", f"nvconv_{camera_id}_{branch_name}")
-                    if not nvconv:
-                        raise RuntimeError(f"Cannot create nvvideoconvert for {branch_name}")
-                    nvconv.set_property("nvbuf-memory-type", 0)
-                    nvconv.set_property("copy-hw", 1)
-                    bin_elem.add(nvconv)
+                        queue.set_property("max-size-buffers", 30)
+                        queue.set_property("max-size-bytes", 0)
+                        queue.set_property("max-size-time", 0)
+                        queue.set_property("leaky", 2)
+                        bin_elem.add(queue)
 
-                    # Request tee src pad and link: tee -> queue -> nvvideoconvert
-                    tee_src = tee.request_pad_simple("src_%u")
-                    if not tee_src:
-                        raise RuntimeError("Cannot request tee src pad")
+                        # Create nvvideoconvert for buffer isolation
+                        nvconv = Gst.ElementFactory.make("nvvideoconvert", f"nvconv_{camera_id}_{branch_name}")
+                        if not nvconv:
+                            raise RuntimeError(f"Cannot create nvvideoconvert for {branch_name}")
+                        nvconv.set_property("nvbuf-memory-type", 0)
+                        nvconv.set_property("copy-hw", 1)
+                        bin_elem.add(nvconv)
 
-                    queue_sink = queue.get_static_pad("sink")
-                    ret = tee_src.link(queue_sink)
-                    if ret != Gst.PadLinkReturn.OK:
-                        raise RuntimeError(f"Cannot link tee -> queue: {ret}")
+                        # Request tee src pad and link: tee -> queue -> nvvideoconvert
+                        tee_src = tee.request_pad_simple("src_%u")
+                        if not tee_src:
+                            raise RuntimeError("Cannot request tee src pad")
 
-                    if not queue.link(nvconv):
-                        raise RuntimeError(f"Cannot link queue -> nvvideoconvert for {branch_name}")
+                        queue_sink = queue.get_static_pad("sink")
+                        ret = tee_src.link(queue_sink)
+                        if ret != Gst.PadLinkReturn.OK:
+                            raise RuntimeError(f"Cannot link tee -> queue: {ret}")
 
-                    branch_queues[branch_name] = nvconv
-                    branch_pads[branch_name] = tee_src
+                        if not queue.link(nvconv):
+                            raise RuntimeError(f"Cannot link queue -> nvvideoconvert for {branch_name}")
 
-                # 4. Add bin to pipeline
-                self.pipeline.add(bin_elem)
+                        branch_queues[branch_name] = nvconv
+                        branch_pads[branch_name] = tee_src
 
-                # 5. Create ghost pads and link to nvstreammux
-                for branch_name, nvconv in branch_queues.items():
-                    branch = self.branches[branch_name]
-                    mux = branch.nvstreammux
+                    # 4. Add bin to pipeline
+                    self.pipeline.add(bin_elem)
 
-                    mux_sink = mux.request_pad_simple(f"sink_{source_id}")
-                    if not mux_sink:
-                        raise RuntimeError(f"Cannot request mux sink pad for {branch_name}")
+                    # 5. Create ghost pads and link to nvstreammux
+                    for branch_name, nvconv in branch_queues.items():
+                        branch = self.branches[branch_name]
+                        mux = branch.nvstreammux
 
-                    nvconv_src = nvconv.get_static_pad("src")
-                    self._ghost_pad_counter += 1
-                    ghost_name = f"src_{branch_name}_{self._ghost_pad_counter}"
-                    ghost = Gst.GhostPad.new(ghost_name, nvconv_src)
-                    bin_elem.add_pad(ghost)
+                        mux_sink = mux.request_pad_simple(f"sink_{source_id}")
+                        if not mux_sink:
+                            raise RuntimeError(f"Cannot request mux sink pad for {branch_name}")
 
-                    ret = ghost.link(mux_sink)
-                    if ret != Gst.PadLinkReturn.OK:
-                        raise RuntimeError(f"Cannot link ghost -> mux: {ret}")
+                        nvconv_src = nvconv.get_static_pad("src")
+                        self._ghost_pad_counter += 1
+                        ghost_name = f"src_{branch_name}_{self._ghost_pad_counter}"
+                        ghost = Gst.GhostPad.new(ghost_name, nvconv_src)
+                        bin_elem.add_pad(ghost)
 
-                    logger.info(f"[{camera_id}] Connected to branch '{branch_name}' (sink_{source_id})")
+                        ret = ghost.link(mux_sink)
+                        if ret != Gst.PadLinkReturn.OK:
+                            raise RuntimeError(f"Cannot link ghost -> mux: {ret}")
 
-                # 6. NOW connect pad-added callback AFTER all setup is done
-                # This prevents race conditions where pads are created before elements are ready
-                def on_pad_added(src, pad, data):
-                    tee_elem, cam_id, fake_audio = data
-                    pad_name = pad.get_name()
-                    print(f"[{cam_id}] Pad added: {pad_name}")
+                        logger.info(f"[{camera_id}] Connected to branch '{branch_name}' (sink_{source_id})")
 
-                    if pad_name.startswith("vsrc"):
-                        tee_sink = tee_elem.get_static_pad("sink")
-                        if tee_sink and not tee_sink.is_linked():
-                            ret = pad.link(tee_sink)
-                            print(f"[{cam_id}] nvurisrcbin video -> tee linked: {ret}")
-                    elif pad_name.startswith("asrc"):
-                        fake_sink = fake_audio.get_static_pad("sink")
-                        if fake_sink and not fake_sink.is_linked():
-                            ret = pad.link(fake_sink)
-                            print(f"[{cam_id}] nvurisrcbin audio -> fakesink linked: {ret}")
+                    # 6. Connect pad-added callback with safety check
+                    def on_pad_added(src, pad, data):
+                        tee_elem, cam_id, fake_audio, manager = data
+                        # Safety: check if camera still exists
+                        if not manager.has_camera(cam_id):
+                            print(f"[{cam_id}] Pad added after removal, ignoring")
+                            return
 
-                nvurisrcbin.connect("pad-added", on_pad_added, (tee, camera_id, audio_fakesink))
+                        pad_name = pad.get_name()
+                        print(f"[{cam_id}] Pad added: {pad_name}")
 
-                # 7. Sync state with pipeline
-                bin_elem.sync_state_with_parent()
+                        try:
+                            if pad_name.startswith("vsrc"):
+                                tee_sink = tee_elem.get_static_pad("sink")
+                                if tee_sink and not tee_sink.is_linked():
+                                    ret = pad.link(tee_sink)
+                                    print(f"[{cam_id}] nvurisrcbin video -> tee linked: {ret}")
+                            elif pad_name.startswith("asrc"):
+                                fake_sink = fake_audio.get_static_pad("sink")
+                                if fake_sink and not fake_sink.is_linked():
+                                    ret = pad.link(fake_sink)
+                                    print(f"[{cam_id}] nvurisrcbin audio -> fakesink linked: {ret}")
+                        except Exception as e:
+                            print(f"[{cam_id}] Error in pad-added callback: {e}")
 
-                # 8. Store camera info
-                self._cameras[camera_id] = CameraBin(
-                    camera_id=camera_id,
-                    uri=uri,
-                    bin=bin_elem,
-                    nvurisrcbin=nvurisrcbin,
-                    tee=tee,
-                    branch_queues=branch_queues,
-                    branch_pads=branch_pads,
-                    source_id=source_id
-                )
+                    nvurisrcbin.connect("pad-added", on_pad_added, (tee, camera_id, audio_fakesink, self))
 
-                logger.info(f"Camera added: {camera_id} -> {valid_branches} (source_id={source_id})")
-                return True
+                    # 7. Sync state with pipeline
+                    bin_elem.sync_state_with_parent()
 
-            except Exception as e:
-                logger.error(f"Failed to add camera {camera_id}: {e}")
-                # Cleanup on failure
-                self._mapper.remove(camera_id)
-                return False
+                    # 8. Store camera info
+                    self._cameras[camera_id] = CameraBin(
+                        camera_id=camera_id,
+                        uri=uri,
+                        bin=bin_elem,
+                        nvurisrcbin=nvurisrcbin,
+                        tee=tee,
+                        branch_queues=branch_queues,
+                        branch_pads=branch_pads,
+                        source_id=source_id
+                    )
+
+                    self._last_op_time = time.time()
+                    logger.info(f"Camera added: {camera_id} -> {valid_branches} (source_id={source_id})")
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Failed to add camera {camera_id}: {e}")
+                    # Cleanup on failure
+                    self._mapper.remove(camera_id)
+                    return False
 
     def remove_camera(self, camera_id: str) -> bool:
         """
@@ -231,42 +250,52 @@ class MultibranchCameraManager:
         Returns:
             True if successful, False if camera not found
         """
-        with self._lock:
-            cam = self._cameras.get(camera_id)
-            if not cam:
-                logger.warning(f"Camera not found: {camera_id}")
-                return False
+        with self._op_lock:
+            elapsed = time.time() - self._last_op_time
+            if elapsed < MIN_OP_DELAY:
+                time.sleep(MIN_OP_DELAY - elapsed)
 
-            try:
-                # 1. Block all tee src pads to prevent data flow
-                for branch_name, tee_pad in cam.branch_pads.items():
-                    tee_pad.add_probe(
-                        Gst.PadProbeType.BLOCK_DOWNSTREAM,
-                        lambda pad, info: Gst.PadProbeReturn.OK
-                    )
+            with self._lock:
+                cam = self._cameras.get(camera_id)
+                if not cam:
+                    logger.warning(f"Camera not found: {camera_id}")
+                    return False
 
-                # 2. Unlink from all muxers and release pads
-                for branch_name in list(cam.branch_queues.keys()):
-                    self._unlink_from_branch(cam, branch_name)
+                try:
+                    # 1. Block all tee src pads to prevent data flow
+                    for branch_name, tee_pad in cam.branch_pads.items():
+                        tee_pad.add_probe(
+                            Gst.PadProbeType.BLOCK_DOWNSTREAM,
+                            lambda pad, info: Gst.PadProbeReturn.OK
+                        )
 
-                # 3. Set bin to NULL state
-                cam.bin.set_state(Gst.State.NULL)
+                    # Wait for buffers to drain
+                    time.sleep(0.3)
 
-                # 4. Remove bin from pipeline
-                self.pipeline.remove(cam.bin)
+                    # 2. Unlink from all muxers and release pads
+                    for branch_name in list(cam.branch_queues.keys()):
+                        self._unlink_from_branch(cam, branch_name)
 
-                # 5. Cleanup mapper
-                self._mapper.remove(camera_id)
+                    # 3. Set bin to NULL state and wait
+                    cam.bin.set_state(Gst.State.NULL)
+                    cam.bin.get_state(Gst.CLOCK_TIME_NONE)
 
-                # 6. Remove from tracking
-                del self._cameras[camera_id]
+                    # 4. Remove bin from pipeline
+                    self.pipeline.remove(cam.bin)
 
-                logger.info(f"Camera removed: {camera_id}")
-                return True
+                    # 5. Cleanup mapper
+                    self._mapper.remove(camera_id)
 
-            except Exception as e:
-                logger.error(f"Failed to remove camera {camera_id}: {e}")
-                return False
+                    # 6. Remove from tracking
+                    del self._cameras[camera_id]
+
+                    self._last_op_time = time.time()
+                    logger.info(f"Camera removed: {camera_id}")
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Failed to remove camera {camera_id}: {e}")
+                    return False
 
     def add_camera_to_branch(self, camera_id: str, branch_name: str) -> bool:
         """
@@ -279,66 +308,72 @@ class MultibranchCameraManager:
         Returns:
             True if successful, False if camera not found or already connected
         """
-        with self._lock:
-            cam = self._cameras.get(camera_id)
-            if not cam:
-                logger.warning(f"Camera not found: {camera_id}")
-                return False
+        with self._op_lock:
+            elapsed = time.time() - self._last_op_time
+            if elapsed < MIN_OP_DELAY:
+                time.sleep(MIN_OP_DELAY - elapsed)
 
-            if branch_name in cam.branch_queues:
-                logger.warning(f"Camera {camera_id} already connected to {branch_name}")
-                return False
+            with self._lock:
+                cam = self._cameras.get(camera_id)
+                if not cam:
+                    logger.warning(f"Camera not found: {camera_id}")
+                    return False
 
-            branch = self.branches.get(branch_name)
-            if not branch:
-                logger.error(f"Branch not found: {branch_name}")
-                return False
+                if branch_name in cam.branch_queues:
+                    logger.warning(f"Camera {camera_id} already connected to {branch_name}")
+                    return False
 
-            try:
-                # 1. Create queue for branch connection
-                queue = Gst.ElementFactory.make("queue", f"q_{camera_id}_{branch_name}")
-                queue.set_property("max-size-buffers", 30)
-                queue.set_property("max-size-bytes", 0)
-                queue.set_property("max-size-time", 0)
-                queue.set_property("leaky", 2)
-                cam.bin.add(queue)
+                branch = self.branches.get(branch_name)
+                if not branch:
+                    logger.error(f"Branch not found: {branch_name}")
+                    return False
 
-                # 2. Create nvvideoconvert for buffer isolation
-                nvconv = Gst.ElementFactory.make("nvvideoconvert", f"nvconv_{camera_id}_{branch_name}")
-                nvconv.set_property("nvbuf-memory-type", 0)
-                nvconv.set_property("copy-hw", 1)
-                cam.bin.add(nvconv)
+                try:
+                    # 1. Create queue for branch connection
+                    queue = Gst.ElementFactory.make("queue", f"q_{camera_id}_{branch_name}")
+                    queue.set_property("max-size-buffers", 30)
+                    queue.set_property("max-size-bytes", 0)
+                    queue.set_property("max-size-time", 0)
+                    queue.set_property("leaky", 2)
+                    cam.bin.add(queue)
 
-                # 3. Request tee src pad and link: tee -> queue -> nvvideoconvert
-                tee_src = cam.tee.request_pad_simple("src_%u")
-                queue_sink = queue.get_static_pad("sink")
-                tee_src.link(queue_sink)
-                queue.link(nvconv)
+                    # 2. Create nvvideoconvert for buffer isolation
+                    nvconv = Gst.ElementFactory.make("nvvideoconvert", f"nvconv_{camera_id}_{branch_name}")
+                    nvconv.set_property("nvbuf-memory-type", 0)
+                    nvconv.set_property("copy-hw", 1)
+                    cam.bin.add(nvconv)
 
-                # 4. Create ghost pad and link to muxer
-                mux_sink = branch.nvstreammux.request_pad_simple(f"sink_{cam.source_id}")
-                nvconv_src = nvconv.get_static_pad("src")
+                    # 3. Request tee src pad and link: tee -> queue -> nvvideoconvert
+                    tee_src = cam.tee.request_pad_simple("src_%u")
+                    queue_sink = queue.get_static_pad("sink")
+                    tee_src.link(queue_sink)
+                    queue.link(nvconv)
 
-                self._ghost_pad_counter += 1
-                ghost_name = f"src_{branch_name}_{self._ghost_pad_counter}"
-                ghost = Gst.GhostPad.new(ghost_name, nvconv_src)
-                cam.bin.add_pad(ghost)
-                ghost.link(mux_sink)
+                    # 4. Create ghost pad and link to muxer
+                    mux_sink = branch.nvstreammux.request_pad_simple(f"sink_{cam.source_id}")
+                    nvconv_src = nvconv.get_static_pad("src")
 
-                # 5. Sync state
-                queue.sync_state_with_parent()
-                nvconv.sync_state_with_parent()
+                    self._ghost_pad_counter += 1
+                    ghost_name = f"src_{branch_name}_{self._ghost_pad_counter}"
+                    ghost = Gst.GhostPad.new(ghost_name, nvconv_src)
+                    cam.bin.add_pad(ghost)
+                    ghost.link(mux_sink)
 
-                # 6. Update tracking
-                cam.branch_queues[branch_name] = nvconv
-                cam.branch_pads[branch_name] = tee_src
+                    # 5. Sync state
+                    queue.sync_state_with_parent()
+                    nvconv.sync_state_with_parent()
 
-                logger.info(f"Camera {camera_id} added to branch '{branch_name}'")
-                return True
+                    # 6. Update tracking
+                    cam.branch_queues[branch_name] = nvconv
+                    cam.branch_pads[branch_name] = tee_src
 
-            except Exception as e:
-                logger.error(f"Failed to add {camera_id} to {branch_name}: {e}")
-                return False
+                    self._last_op_time = time.time()
+                    logger.info(f"Camera {camera_id} added to branch '{branch_name}'")
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Failed to add {camera_id} to {branch_name}: {e}")
+                    return False
 
     def remove_camera_from_branch(self, camera_id: str, branch_name: str) -> bool:
         """
@@ -351,38 +386,47 @@ class MultibranchCameraManager:
         Returns:
             True if successful, False if camera/branch not found
         """
-        with self._lock:
-            cam = self._cameras.get(camera_id)
-            if not cam:
-                logger.warning(f"Camera not found: {camera_id}")
-                return False
+        with self._op_lock:
+            elapsed = time.time() - self._last_op_time
+            if elapsed < MIN_OP_DELAY:
+                time.sleep(MIN_OP_DELAY - elapsed)
 
-            if branch_name not in cam.branch_queues:
-                logger.warning(f"Camera {camera_id} not connected to {branch_name}")
-                return False
+            with self._lock:
+                cam = self._cameras.get(camera_id)
+                if not cam:
+                    logger.warning(f"Camera not found: {camera_id}")
+                    return False
 
-            # Don't allow removing from last branch - use remove_camera() instead
-            if len(cam.branch_queues) == 1:
-                logger.warning(f"Cannot remove {camera_id} from last branch. Use remove_camera()")
-                return False
+                if branch_name not in cam.branch_queues:
+                    logger.warning(f"Camera {camera_id} not connected to {branch_name}")
+                    return False
 
-            try:
-                # 1. Block tee src pad
-                tee_src = cam.branch_pads[branch_name]
-                tee_src.add_probe(
-                    Gst.PadProbeType.BLOCK_DOWNSTREAM,
-                    lambda pad, info: Gst.PadProbeReturn.OK
-                )
+                # Don't allow removing from last branch - use remove_camera() instead
+                if len(cam.branch_queues) == 1:
+                    logger.warning(f"Cannot remove {camera_id} from last branch. Use remove_camera()")
+                    return False
 
-                # 2. Unlink and cleanup
-                self._unlink_from_branch(cam, branch_name)
+                try:
+                    # 1. Block tee src pad
+                    tee_src = cam.branch_pads[branch_name]
+                    tee_src.add_probe(
+                        Gst.PadProbeType.BLOCK_DOWNSTREAM,
+                        lambda pad, info: Gst.PadProbeReturn.OK
+                    )
 
-                logger.info(f"Camera {camera_id} removed from branch '{branch_name}'")
-                return True
+                    # Wait for buffers to drain
+                    time.sleep(0.3)
 
-            except Exception as e:
-                logger.error(f"Failed to remove {camera_id} from {branch_name}: {e}")
-                return False
+                    # 2. Unlink and cleanup
+                    self._unlink_from_branch(cam, branch_name)
+
+                    self._last_op_time = time.time()
+                    logger.info(f"Camera {camera_id} removed from branch '{branch_name}'")
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Failed to remove {camera_id} from {branch_name}: {e}")
+                    return False
 
     def _unlink_from_branch(self, cam: CameraBin, branch_name: str) -> None:
         """

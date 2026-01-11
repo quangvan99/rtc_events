@@ -163,12 +163,3 @@ class TrackerManager:
             result[source_id] = (total, confirmed, total - confirmed)
         return result
 
-    # Backward compatibility for single-camera mode (source_id=0)
-
-    def get_single(self, oid: int) -> TrackedFace | None:
-        """Get tracker for single-camera mode (source_id=0)"""
-        return self.get(0, oid)
-
-    def get_or_create_single(self, oid: int, frame: int) -> TrackedFace:
-        """Get or create tracker for single-camera mode (source_id=0)"""
-        return self.get_or_create(0, oid, frame)

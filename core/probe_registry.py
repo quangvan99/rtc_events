@@ -41,44 +41,29 @@ class ProbeRegistry:
         """
         return self._probes.get(name)
 
-    def attach(
-        self, element: Gst.Element, pad_name: str, probe_name: str, user_data: Any = None
-    ) -> bool:
+    def attach(self, element: Gst.Element, pad_name: str, probe_name: str) -> bool:
         """
         Attach a registered probe to an element's pad
 
         Args:
             element: GStreamer element
-            pad_name: Name of the pad (e.g., "src", "sink")
+            pad_name: Name of the pad to attach to (e.g., 'src', 'sink')
             probe_name: Name of the registered probe
-            user_data: Optional user data to pass to probe callback
 
         Returns:
-            True if probe attached successfully, False otherwise
+            True if attached successfully, False otherwise
         """
-        callback = self.get(probe_name)
-        if not callback:
-            print(f"[ProbeRegistry] Warning: probe '{probe_name}' not registered")
+        callback = self._probes.get(probe_name)
+        if callback is None:
+            print(f"[ProbeRegistry] Warning: probe '{probe_name}' not found")
             return False
 
         pad = element.get_static_pad(pad_name)
-        if not pad:
-            print(
-                f"[ProbeRegistry] Warning: pad '{pad_name}' not found on {element.get_name()}"
-            )
+        if pad is None:
+            print(f"[ProbeRegistry] Warning: pad '{pad_name}' not found on {element.get_name()}")
             return False
 
-        pad.add_probe(Gst.PadProbeType.BUFFER, callback, user_data)
-        print(
-            f"[ProbeRegistry] Attached probe '{probe_name}' to {element.get_name()}:{pad_name}"
-        )
+        pad.add_probe(Gst.PadProbeType.BUFFER, callback, None)
+        print(f"[ProbeRegistry] Attached probe '{probe_name}' to {element.get_name()}:{pad_name}")
         return True
 
-    def list_probes(self) -> list[str]:
-        """
-        Get list of all registered probe names
-
-        Returns:
-            List of probe names
-        """
-        return list(self._probes.keys())

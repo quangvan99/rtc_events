@@ -4,15 +4,6 @@ Multi-Branch Pipeline Test with Face Recognition
 
 Usage:
     python bin/test_multi_branch_video.py
-
-API Endpoints:
-    GET  /api/health         - Health check
-    GET  /api/cameras        - List cameras
-    GET  /api/branches       - List branches
-    GET  /api/operations/{id} - Check operation status
-    POST /api/cameras        - Add camera (async)
-    DELETE /api/cameras/{id} - Remove camera
-    POST /api/pipeline/stop  - Stop pipeline
 """
 
 import argparse
@@ -25,7 +16,7 @@ import http.server
 import socketserver
 import json
 import queue
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
@@ -57,10 +48,10 @@ class CameraAPIServer:
         self.op_lock = threading.Lock()
         self.min_delay = 3.0
         self.last_op = 0.0
-        self.executor = ThreadPoolExecutor(max_workers=4)
         self._running = True
         self.rtsp_uri = "rtsp://192.168.6.14:8554/test"
         self.http_thread = None
+        self._op_thread = None
 
     def _process_ops(self):
         while self._running:
@@ -72,8 +63,9 @@ class CameraAPIServer:
                     if elapsed < self.min_delay:
                         time.sleep(self.min_delay - elapsed)
                     self.last_op = time.time()
+
                 try:
-                    result = self.executor.submit(func, *args, **kwargs).result(timeout=60)
+                    result = func(*args, **kwargs)
                     self.op_results[op_id] = {"status": "ok", "result": result}
                 except Exception as e:
                     self.op_results[op_id] = {"status": "error", "error": str(e)}
@@ -198,12 +190,11 @@ class CameraAPIServer:
     def start(self):
         self.http_thread = threading.Thread(target=self._run_http, daemon=True)
         self.http_thread.start()
-        self.op_thread = threading.Thread(target=self._process_ops, daemon=True)
-        self.op_thread.start()
+        self._op_thread = threading.Thread(target=self._process_ops, daemon=True)
+        self._op_thread.start()
 
     def stop(self):
         self._running = False
-        self.executor.shutdown(wait=True)
 
 
 def main():
@@ -286,7 +277,7 @@ curl -X POST http://localhost:8083/api/cameras \\
      -H "Content-Type: application/json" \\
      -d '{"camera_id": "cam1", "uri": "rtsp://192.168.6.14:8554/test", "branches": ["recognition", "detection"]}'
 
-# Step 2: Add cam2 (wait 2s after step 1)
+# Step 2: Add cam2 (wait 3s after step 1)
 curl -X POST http://localhost:8083/api/cameras \\
      -H "Content-Type: application/json" \\
      -d '{"camera_id": "cam2", "uri": "rtsp://192.168.6.14:8554/test", "branches": ["recognition", "detection"]}'
@@ -307,7 +298,6 @@ Press Ctrl+C to stop...
     """)
 
     def check_pipeline_health():
-        """Check if pipeline is still healthy"""
         try:
             state = pipeline.get_state(0)
             if state == Gst.StateChangeReturn.FAILURE:

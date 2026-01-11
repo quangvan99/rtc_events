@@ -1,0 +1,76 @@
+# ==========================================
+# DeepStream 7.0 Face Recognition + WebRTC
+# ==========================================
+FROM nvcr.io/nvidia/deepstream:7.0-triton-multiarch
+
+# ----------------
+# Environment
+# ----------------
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    GST_DEBUG=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+    LD_LIBRARY_PATH=/opt/nvidia/deepstream/deepstream/lib:$LD_LIBRARY_PATH \
+    PYTHONPATH=/opt/nvidia/deepstream/deepstream/lib:$PYTHONPATH
+
+# Set working directory
+WORKDIR /app
+
+# Step 1: Install gstreamer1.0-libav
+RUN apt-get update && apt-get install -y gstreamer1.0-libav
+
+# Step 2: Reinstall gstreamer plugins and ffmpeg libs
+RUN apt-get install --reinstall -y \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    libswresample-dev \
+    libavutil-dev \
+    libavutil56 \
+    libavcodec-dev \
+    libavcodec58 \
+    libavformat-dev \
+    libavformat58 \
+    libavfilter7 \
+    libde265-dev \
+    libde265-0 \
+    libx265-199 \
+    libx264-163 \
+    libvpx7 \
+    libmpeg2encpp-2.1-0 \
+    libmpeg2-4 \
+    libmpg123-0
+
+# Step 3: Install gstreamer and python dependencies
+RUN apt-get install -y \
+    gstreamer1.0 \
+    python3-pip \
+    python3-gst-1.0 \
+    gir1.2-gst-plugins-bad-1.0 \
+    gstreamer1.0-nice \
+    pkg-config \
+    libcairo2-dev \
+    gcc \
+    python3-dev \
+    libgirepository1.0-dev
+
+# Step 4: Install opencv (deepstream 7.0)
+RUN apt-get install -y libopencv-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf ~/.cache/gstreamer-1.0/
+
+# Install Python packages
+RUN pip3 install --no-cache-dir \
+    websockets \
+    numpy \
+    PyGObject \
+    https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.11/pyds-1.1.11-py3-none-linux_x86_64.whl
+
+# Install additional requirements
+COPY scripts/requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
+# Build custom gst-nvinfer plugin
+COPY models/gst-nvinfer_7_0_cuda /tmp/gst-nvinfer
+RUN cd /tmp/gst-nvinfer && bash make.sh && rm -rf /tmp/gst-nvinfer

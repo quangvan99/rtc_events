@@ -1,0 +1,52 @@
+# Docker Compose v2 configuration for Face Recognition WebRTC Stream
+services:
+  face-stream:
+    build:
+      context: ..
+      dockerfile: scripts/Dockerfile_7_1
+    container_name: face-stream
+    restart: unless-stopped
+    env_file:
+      - .env
+
+    # Privileged mode required for nvv4l2decoder (/dev/video* access)
+    privileged: true
+
+    # GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, compute, utility]
+
+    # Network configuration
+    network_mode: host
+
+    volumes:
+      # Mount project directory to both /app and original path for compatibility
+      - ..:/app
+      - /home/mq/disk2T/quangnv/face:/home/mq/disk2T/quangnv/face
+
+    # Environment variables (from .env + defaults)
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - GST_DEBUG=${GST_DEBUG:-2}
+      - PYTHONUNBUFFERED=1
+      - DISPLAY=${DISPLAY:-:0}
+      - WS_SERVER=${WS_SERVER:-192.168.6.16}
+      - WS_PORT=${WS_PORT:-8555}
+
+    # Interactive mode for debugging
+    stdin_open: true
+    tty: true
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${WS_PORT:-8555}/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
