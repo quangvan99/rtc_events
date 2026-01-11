@@ -5,7 +5,7 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
-from sinks.base_sink import BaseSink
+from src.sinks.base_sink import BaseSink
 
 
 class FilesinkAdapter(BaseSink):
@@ -57,30 +57,23 @@ class FilesinkAdapter(BaseSink):
         queue_in = Gst.ElementFactory.make("queue", f"{prefix}_queue_in")
         queue_in.set_property("max-size-buffers", 30)
         queue_in.set_property("leaky", 2)
-        queue_in.set_property("silent", True)
 
         nvvidconv = Gst.ElementFactory.make("nvvideoconvert", f"{prefix}_nvvidconv")
         nvvidconv.set_property("compute-hw", 1)
         nvvidconv.set_property("nvbuf-memory-type", 3)
-        nvvidconv.set_property("silent", True)
 
         capsfilter = Gst.ElementFactory.make("capsfilter", f"{prefix}_caps")
-        caps = Gst.Caps.from_string("video/x-raw, format=RGBA, memory:SystemMemory")
+        caps = Gst.Caps.from_string("video/x-raw, format=RGBA")
         capsfilter.set_property("caps", caps)
-        capsfilter.set_property("silent", True)
 
         identity = Gst.ElementFactory.make("identity", f"{prefix}_identity")
-        identity.set_property("silent", True)
         identity.set_property("drop-probability", 0)
-        identity.set_property("error", False)
 
         videoconvert = Gst.ElementFactory.make("videoconvert", f"{prefix}_vidconv")
-        videoconvert.set_property("silent", True)
 
         queue_enc = Gst.ElementFactory.make("queue", f"{prefix}_queue_enc")
         queue_enc.set_property("max-size-buffers", 30)
         queue_enc.set_property("leaky", 2)
-        queue_enc.set_property("silent", True)
 
         encoder = Gst.ElementFactory.make("x264enc", f"{prefix}_encoder")
         encoder.set_property("bitrate", self.bitrate // 1000)
@@ -93,7 +86,6 @@ class FilesinkAdapter(BaseSink):
 
         parser = Gst.ElementFactory.make("h264parse", f"{prefix}_parser")
         parser.set_property("config-interval", -1)
-        parser.set_property("silent", True)
 
         if self.location.endswith(".mp4"):
             muxer = Gst.ElementFactory.make("mp4mux", f"{prefix}_muxer")

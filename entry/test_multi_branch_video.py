@@ -18,9 +18,9 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
-from core.tee_fanout_builder import TeeFanoutPipelineBuilder
-from core.multibranch_camera_manager import MultibranchCameraManager
-from core.config import load_config
+from src.tee_fanout_builder import TeeFanoutPipelineBuilder
+from src.multibranch_camera_manager import MultibranchCameraManager
+from src.config import load_config
 from apps.face.setup import setup_face_recognition, register_face_probes
 from api.camera_api import CameraAPIServer
 from api.shutdown import stop_event, setup_signal_handlers, wait_for_shutdown

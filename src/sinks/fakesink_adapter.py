@@ -8,7 +8,7 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
-from sinks.base_sink import BaseSink
+from src.sinks.base_sink import BaseSink
 
 
 class FakesinkAdapter(BaseSink):

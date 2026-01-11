@@ -2,7 +2,7 @@
 
 import time
 
-from sinks.base_sink import BaseSink
+from src.sinks.base_sink import BaseSink
 
 
 class FaceEventEmitter:

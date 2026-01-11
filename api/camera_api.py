@@ -26,7 +26,7 @@ from pydantic import BaseModel
 import uvicorn
 
 if TYPE_CHECKING:
-    from core.multibranch_camera_manager import MultibranchCameraManager
+    from src.multibranch_camera_manager import MultibranchCameraManager
 
 logger = logging.getLogger(__name__)
 

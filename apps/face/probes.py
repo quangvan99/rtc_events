@@ -15,7 +15,7 @@ from apps.face.database import FaceDatabase
 from apps.face.tracker import TrackerManager
 from apps.face.display import FaceDisplay
 from apps.face.events import FaceEventEmitter
-from sinks.base_sink import BaseSink
+from src.sinks.base_sink import BaseSink
 
 
 # Skip SGIE for faces with this component ID

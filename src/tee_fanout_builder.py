@@ -22,8 +22,8 @@ from gi.repository import GLib, Gst
 # DeepStream Python bindings
 sys.path.append("/opt/nvidia/deepstream/deepstream/lib")
 
-from sinks.base_sink import BaseSink
-from core.probe_registry import ProbeRegistry
+from src.sinks.base_sink import BaseSink
+from src.probe_registry import ProbeRegistry
 
 
 def _coerce_property_value(value):
@@ -92,8 +92,8 @@ class TeeFanoutPipelineBuilder:
             config: Pipeline configuration dict with 'pipeline.branches' and 'output' sections
             branch_sinks: Optional mapping branch_name -> BaseSink adapter
         """
-        from sinks.filesink_adapter import FilesinkAdapter
-        from sinks.fakesink_adapter import FakesinkAdapter
+        from src.sinks.filesink_adapter import FilesinkAdapter
+        from src.sinks.fakesink_adapter import FakesinkAdapter
         import os
 
         self.config = config

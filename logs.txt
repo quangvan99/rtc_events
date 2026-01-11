@@ -181,13 +181,7 @@ hãy phân tích lại codebase sau đó đề xuất cấu trúc thư mục m�
   - có thể mở rộng bài toán, ví dụ sau này tôi muốn thêm bài toán và logic liên quan đến license plate chẳng hạn.
   - tách logic và deepstream code 
   - đi từ 1 config-driven yaml
+  - ghi brainsromming vừa rồi xuống docs/codefolder.md
 
-def create(self, pipeline: Gst.Pipeline) -> Gst.Element:
-    """
-    Create filesink pipeline for DeepStream:
-    queue -> nvvideoconvert(compute-hw=1) -> caps(RGBA) -> identity(pts) -> videoconvert -> x264enc -> muxer -> filesink
-    queue -> nvvideoconvert(compute-hw=1) -> caps(RGBA) -> videoconvert -> x264enc -> muxer -> filesink
-    Key fixes for timestamp issues:
-    - identity with timestamp handling to fix PTS
-    - Larger queues to prevent frame drops
-    - Proper encoder config for smooth encoding
+Tu docs/codefolder.md, cho toi 1 comprehensive plan gồm nhiều phase
+ghi vào folder @plans/folder_refactor

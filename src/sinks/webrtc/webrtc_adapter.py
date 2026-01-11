@@ -16,7 +16,7 @@ from gi.repository import Gst, GstSdp, GstWebRTC
 
 import websockets
 
-from sinks.base_sink import BaseSink
+from src.sinks.base_sink import BaseSink
 
 
 class WebRTCAdapter(BaseSink):
