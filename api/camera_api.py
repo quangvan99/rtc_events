@@ -1,5 +1,5 @@
 """
-CameraAPIServer - REST API for MultibranchCameraManager
+CameraAPIServer - REST API for MultibranchCameraManager using FastAPI
 
 Endpoints:
 - POST   /api/cameras                              - Add camera to branches
@@ -9,18 +9,21 @@ Endpoints:
 - GET    /api/cameras                              - List all cameras
 - GET    /api/branches                             - List all branches
 - GET    /api/health                               - Health check
+- GET    /api/operations/{op_id}                   - Get operation status
 - POST   /api/pipeline/kill                        - Remove all cameras
+- POST   /api/pipeline/stop                        - Stop pipeline
 """
 
-from __future__ import annotations
-
-import asyncio
 import logging
+import queue
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 
-from aiohttp import web
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 
 if TYPE_CHECKING:
     from core.multibranch_camera_manager import MultibranchCameraManager
@@ -29,236 +32,156 @@ logger = logging.getLogger(__name__)
 
 
 class CameraAPIServer:
-    """REST API server for camera management"""
-
-    MIN_OP_DELAY = 2.0  # Minimum delay between operations (seconds)
+    MIN_OP_DELAY = 2.0
 
     def __init__(
         self,
         manager: "MultibranchCameraManager",
         host: str = "0.0.0.0",
         port: int = 8080,
-        shutdown_event: asyncio.Event | None = None
+        shutdown_event=None
     ):
         self.manager = manager
         self.host = host
         self.port = port
         self.shutdown_event = shutdown_event
-        self.app = web.Application()
-        self._setup_routes()
-        self._last_operation_time = 0.0
-        self._op_lock = threading.Lock()
-        self._gst_lock = threading.Lock()
+        self.op_queue = queue.Queue()
+        self.op_results = {}
+        self.op_lock = threading.Lock()
+        self._running = True
+        self._app = None
 
-    def _run_gst_operation(self, func, *args, **kwargs):
-        """Run GStreamer operation with proper locking"""
-        with self._gst_lock:
-            return func(*args, **kwargs)
+    def _process_ops(self):
+        while self._running:
+            try:
+                op_id, func, args, kwargs = self.op_queue.get(timeout=0.2)
+                with self.op_lock:
+                    now = time.time()
+                    elapsed = now - self.last_op
+                    if elapsed < self.min_delay:
+                        time.sleep(self.min_delay - elapsed)
+                    self.last_op = time.time()
 
-    def _setup_routes(self):
-        """Setup API routes"""
-        self.app.router.add_post("/api/cameras", self.add_camera)
-        self.app.router.add_delete("/api/cameras/{camera_id}", self.remove_camera)
-        self.app.router.add_post("/api/cameras/{camera_id}/branches/{branch_name}", self.add_to_branch)
-        self.app.router.add_delete("/api/cameras/{camera_id}/branches/{branch_name}", self.remove_from_branch)
-        self.app.router.add_get("/api/cameras", self.list_cameras)
-        self.app.router.add_get("/api/branches", self.list_branches)
-        self.app.router.add_get("/api/health", self.health_check)
-        self.app.router.add_post("/api/pipeline/kill", self.kill_pipeline)
-        self.app.router.add_post("/api/pipeline/stop", self.stop_pipeline)
+                try:
+                    result = func(*args, **kwargs)
+                    self.op_results[op_id] = {"status": "ok", "result": result}
+                except Exception as e:
+                    self.op_results[op_id] = {"status": "error", "error": str(e)}
+                self.op_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception:
+                pass
 
-    # === Camera CRUD ===
+    def _create_app(self) -> FastAPI:
+        app = FastAPI(title="Camera API")
 
-    async def add_camera(self, request: web.Request) -> web.Response:
-        """POST /api/cameras - Add camera to branches
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
-        Body: {"camera_id": "cam1", "uri": "rtsp://...", "branches": ["recognition"]}
-        """
-        try:
-            with self._op_lock:
-                now = time.time()
-                elapsed = now - self._last_operation_time
-                if elapsed < self.MIN_OP_DELAY:
-                    time.sleep(self.MIN_OP_DELAY - elapsed)
-                self._last_operation_time = time.time()
+        class AddCameraRequest(BaseModel):
+            camera_id: str
+            uri: str
+            branches: List[str] = []
 
-            data = await request.json()
-            camera_id = data["camera_id"]
-            uri = data["uri"]
-            branches = data.get("branches", [])
+        @app.get("/api/health")
+        async def health():
+            count = self.manager.count()
+            branches = list(self.manager.branches.keys())
+            return {"status": "healthy", "cameras": count, "branches": branches}
 
-            if not branches:
-                return web.json_response({"error": "branches required"}, status=400)
+        @app.get("/api/cameras")
+        async def list_cameras():
+            cameras = self.manager.list_cameras()
+            return {"cameras": cameras}
 
-            result = self._run_gst_operation(self.manager.add_camera, camera_id, uri, branches)
+        @app.get("/api/branches")
+        async def list_branches():
+            branches = {}
+            for name, info in self.manager.branches.items():
+                cams = [cid for cid, cam in self.manager._cameras.items() if name in cam.branch_queues]
+                branches[name] = {"max_cameras": info.max_cameras, "current_cameras": cams}
+            return {"branches": branches}
 
+        @app.get("/api/operations/{op_id}")
+        async def get_operation(op_id: str):
+            result = self.op_results.get(op_id)
             if result:
-                logger.info(f"API: Camera added: {camera_id}")
-                return web.json_response({"status": "ok", "camera_id": camera_id})
-            else:
-                return web.json_response({"error": "add failed"}, status=400)
+                return result
+            raise HTTPException(status_code=404, detail="operation not found")
 
-        except KeyError as e:
-            return web.json_response({"error": f"missing field: {e}"}, status=400)
-        except Exception as e:
-            logger.exception(f"API error: {e}")
-            return web.json_response({"error": str(e)}, status=500)
+        @app.post("/api/cameras")
+        async def add_camera(request: AddCameraRequest):
+            import uuid
+            camera_id = request.camera_id
+            uri = request.uri
+            branches = request.branches
+            op_id = str(uuid.uuid4())[:8]
+            self.op_queue.put((op_id, self.manager.add_camera, (camera_id, uri, branches), {}))
+            return {"status": "accepted", "operation_id": op_id}
 
-    async def remove_camera(self, request: web.Request) -> web.Response:
-        """DELETE /api/cameras/{camera_id} - Remove camera entirely"""
-        try:
-            with self._op_lock:
-                now = time.time()
-                elapsed = now - self._last_operation_time
-                if elapsed < self.MIN_OP_DELAY:
-                    time.sleep(self.MIN_OP_DELAY - elapsed)
-                self._last_operation_time = time.time()
+        @app.post("/api/cameras/{camera_id}/branches/{branch_name}")
+        async def add_camera_to_branch(camera_id: str, branch_name: str):
+            import uuid
+            op_id = str(uuid.uuid4())[:8]
+            self.op_queue.put((op_id, self.manager.add_camera_to_branch, (camera_id, branch_name), {}))
+            return {"status": "accepted", "operation_id": op_id}
 
-            camera_id = request.match_info["camera_id"]
+        @app.post("/api/pipeline/kill")
+        async def kill_pipeline():
+            import uuid
+            op_id = str(uuid.uuid4())[:8]
+            self.op_queue.put((op_id, self.manager.kill_all, (), {}))
+            return {"status": "accepted", "operation_id": op_id}
 
-            result = self._run_gst_operation(self.manager.remove_camera, camera_id)
-
-            if result:
-                logger.info(f"API: Camera removed: {camera_id}")
-                return web.json_response({"status": "ok", "camera_id": camera_id})
-            else:
-                return web.json_response({"error": "camera not found"}, status=404)
-        except Exception as e:
-            logger.exception(f"API error: {e}")
-            return web.json_response({"error": str(e)}, status=500)
-
-    # === Branch Operations ===
-
-    async def add_to_branch(self, request: web.Request) -> web.Response:
-        """POST /api/cameras/{camera_id}/branches/{branch_name} - Add to branch"""
-        try:
-            with self._op_lock:
-                now = time.time()
-                elapsed = now - self._last_operation_time
-                if elapsed < self.MIN_OP_DELAY:
-                    time.sleep(self.MIN_OP_DELAY - elapsed)
-                self._last_operation_time = time.time()
-
-            camera_id = request.match_info["camera_id"]
-            branch_name = request.match_info["branch_name"]
-
-            result = self._run_gst_operation(self.manager.add_camera_to_branch, camera_id, branch_name)
-
-            if result:
-                logger.info(f"API: {camera_id} added to branch {branch_name}")
-                return web.json_response({"status": "ok", "camera_id": camera_id, "branch": branch_name})
-            else:
-                return web.json_response({"error": "operation failed"}, status=400)
-        except Exception as e:
-            logger.exception(f"API error: {e}")
-            return web.json_response({"error": str(e)}, status=500)
-
-    async def remove_from_branch(self, request: web.Request) -> web.Response:
-        """DELETE /api/cameras/{camera_id}/branches/{branch_name} - Remove from branch"""
-        try:
-            with self._op_lock:
-                now = time.time()
-                elapsed = now - self._last_operation_time
-                if elapsed < self.MIN_OP_DELAY:
-                    time.sleep(self.MIN_OP_DELAY - elapsed)
-                self._last_operation_time = time.time()
-
-            camera_id = request.match_info["camera_id"]
-            branch_name = request.match_info["branch_name"]
-
-            result = self._run_gst_operation(self.manager.remove_camera_from_branch, camera_id, branch_name)
-
-            if result:
-                logger.info(f"API: {camera_id} removed from branch {branch_name}")
-                return web.json_response({"status": "ok", "camera_id": camera_id, "branch": branch_name})
-            else:
-                return web.json_response({"error": "operation failed"}, status=400)
-        except asyncio.TimeoutError:
-            logger.error(f"API: Remove from branch timeout for {camera_id}/{branch_name}")
-            return web.json_response({"error": "operation timeout"}, status=408)
-        except Exception as e:
-            logger.exception(f"API error: {e}")
-            return web.json_response({"error": str(e)}, status=500)
-
-    # === List Operations ===
-
-    async def list_cameras(self, request: web.Request) -> web.Response:
-        """GET /api/cameras - List all cameras"""
-        cameras = self.manager.list_cameras()
-        return web.json_response({"cameras": cameras})
-
-    async def list_branches(self, request: web.Request) -> web.Response:
-        """GET /api/branches - List all branches with cameras"""
-        branches = {}
-        for name, info in self.manager.branches.items():
-            cameras_in_branch = [
-                cam_id for cam_id, cam in self.manager._cameras.items()
-                if name in cam.branch_queues
-            ]
-            branches[name] = {
-                "max_cameras": info.max_cameras,
-                "current_cameras": cameras_in_branch
-            }
-        return web.json_response({"branches": branches})
-
-    async def health_check(self, request: web.Request) -> web.Response:
-        """GET /api/health - Health check"""
-        return web.json_response({
-            "status": "healthy",
-            "cameras": self.manager.count(),
-            "branches": list(self.manager.branches.keys())
-        })
-
-    async def kill_pipeline(self, request: web.Request) -> web.Response:
-        """POST /api/pipeline/kill - Remove all cameras from pipeline"""
-        try:
-            with self._op_lock:
-                now = time.time()
-                elapsed = now - self._last_operation_time
-                if elapsed < self.MIN_OP_DELAY:
-                    time.sleep(self.MIN_OP_DELAY - elapsed)
-                self._last_operation_time = time.time()
-
-            count = self._run_gst_operation(self.manager.kill_all)
-            logger.info(f"API: Pipeline killed - {count} cameras removed")
-            return web.json_response({"status": "ok", "cameras_removed": count})
-        except Exception as e:
-            logger.exception(f"API error: {e}")
-            return web.json_response({"error": str(e)}, status=500)
-
-    async def stop_pipeline(self, request: web.Request) -> web.Response:
-        """POST /api/pipeline/stop - Stop the entire pipeline (triggers shutdown)"""
-        try:
-            with self._op_lock:
-                now = time.time()
-                elapsed = now - self._last_operation_time
-                if elapsed < self.MIN_OP_DELAY:
-                    time.sleep(self.MIN_OP_DELAY - elapsed)
-                self._last_operation_time = time.time()
-
-            self._run_gst_operation(self.manager.kill_all)
+        @app.post("/api/pipeline/stop")
+        async def stop_pipeline():
+            self.op_queue.put(("stop", self.manager.kill_all, (), {}))
             if self.shutdown_event:
                 self.shutdown_event.set()
-                logger.info("API: Pipeline stop signaled")
-                return web.json_response({"status": "ok", "message": "Pipeline shutdown initiated"})
-            else:
-                logger.warning("API: No shutdown event configured")
-                return web.json_response({"error": "Shutdown not configured", "cameras_removed": self.manager.count()}, status=400)
-        except Exception as e:
-            logger.exception(f"API error: {e}")
-            return web.json_response({"error": str(e)}, status=500)
+            return {"status": "ok", "message": "shutdown"}
 
-    # === Server Control ===
+        @app.delete("/api/cameras/{camera_id}")
+        async def remove_camera(camera_id: str):
+            import uuid
+            op_id = str(uuid.uuid4())[:8]
+            self.op_queue.put((op_id, self.manager.remove_camera, (camera_id,), {}))
+            return {"status": "accepted", "operation_id": op_id}
 
-    async def start(self):
-        """Start the API server"""
-        runner = web.AppRunner(self.app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.host, self.port)
-        await site.start()
+        @app.delete("/api/cameras/{camera_id}/branches/{branch_name}")
+        async def remove_camera_from_branch(camera_id: str, branch_name: str):
+            import uuid
+            op_id = str(uuid.uuid4())[:8]
+            self.op_queue.put((op_id, self.manager.remove_camera_from_branch, (camera_id, branch_name), {}))
+            return {"status": "accepted", "operation_id": op_id}
+
+        return app
+
+    def start(self):
+        self._op_thread = threading.Thread(target=self._process_ops, daemon=True)
+        self._op_thread.start()
+        self._app = self._create_app()
+        config = uvicorn.Config(self._app, host=self.host, port=self.port, log_level="warning")
+        self._server = uvicorn.Server(config=config)
+        threading.Thread(target=self._server.run, daemon=True).start()
         logger.info(f"[CameraAPI] Server running at http://{self.host}:{self.port}")
-        return runner
 
-    def run_blocking(self):
-        """Run server in blocking mode (for standalone use)"""
-        web.run_app(self.app, host=self.host, port=self.port)
+    def stop(self):
+        self._running = False
+
+    @property
+    def last_op(self):
+        return self._last_op if hasattr(self, '_last_op') else 0.0
+
+    @last_op.setter
+    def last_op(self, value):
+        self._last_op = value
+
+    @property
+    def min_delay(self):
+        return self.MIN_OP_DELAY

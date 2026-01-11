@@ -4,7 +4,7 @@
 
 DOCKER_CONTAINER="face-stream"
 PROJECT_DIR="/home/mq/disk2T/quangnv/face"
-MAX_RETRIES=10
+MAX_RETRIES=30
 PORT=8083
 
 echo "=== Full Test with Video Recording ==="
@@ -146,6 +146,16 @@ docker exec "$DOCKER_CONTAINER" cat /tmp/full_test.log 2>/dev/null | grep -E "So
 echo ""
 echo "=== Pipeline Process ==="
 docker exec -w "$PROJECT_DIR" "$DOCKER_CONTAINER" ps aux | grep python || echo "No Python processes"
+
+echo ""
+echo "=== Remove all cameras (keep pipeline running) ==="
+curl -s -X POST http://localhost:$PORT/api/pipeline/kill
+echo ""
+
+echo ""
+echo "=== Stop the entire pipeline (shutdown application) ==="
+curl -s -X POST http://localhost:$PORT/api/pipeline/stop
+echo ""
 
 echo ""
 echo "=== Test Complete ==="

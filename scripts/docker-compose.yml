@@ -3,7 +3,7 @@ services:
   face-stream:
     build:
       context: ..
-      dockerfile: scripts/Dockerfile_7_1
+      dockerfile: scripts/Dockerfile
     container_name: face-stream
     restart: unless-stopped
     env_file:

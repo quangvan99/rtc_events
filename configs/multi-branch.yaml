@@ -1,16 +1,15 @@
+# =============================================================================
 # Multi-Branch Pipeline Configuration
-# Uses nvurisrcbin + tee for single-decode, multi-branch fanout
-#
+# =============================================================================
 # Architecture:
-#   Camera -> nvurisrcbin -> tee -> queue -> nvstreammux (Branch A) -> PGIE -> ...
-#                               -> queue -> nvstreammux (Branch B) -> PGIE -> ...
+#   Camera -> nvurisrcbin -> tee -> queue -> nvstreammux (Branch A) -> elements -> filesink
+#                               -> queue -> nvstreammux (Branch B) -> elements -> filesink
 #
-# Camera management via REST API (Phase 3):
-#   POST /api/cameras - Add camera to branches
-#   DELETE /api/cameras/{id} - Remove camera
+# Each branch saves video to: {output.dir}/{output.prefix}_{branch_name}.avi
+# =============================================================================
 
 # =============================================================================
-# Recognition Settings (for recognition branch)
+# Face Recognition Settings (for recognition branch)
 # =============================================================================
 recognition:
   features_json: "${FEATURES_JSON:/home/mq/disk2T/quangnv/face/data/face/features.json}"
@@ -28,9 +27,18 @@ pipeline:
 
   # Branch definitions - each branch has independent nvstreammux
   branches:
-    # Branch 1: Face Recognition (PGIE + tracker + SGIE)
+
+    # -----------------------------------------------------------------------
+    # Branch 1: Face Recognition (PGIE + tracker + SGIE + tiler + osd)
+    # Output: {output.dir}/output_recognition.avi (or override below)
+    # -----------------------------------------------------------------------
     recognition:
       max_cameras: 8
+
+      # Optional: Override output for this branch
+      # sink:
+      #   type: fakesink      # Use fakesink to discard output
+      #   location: /home/mq/disk2T/quangnv/face/data/my_recognition.avi  # Custom file
 
       muxer:
         batch-size: 8
@@ -41,38 +49,32 @@ pipeline:
         nvbuf-memory-type: 0
 
       elements:
-        # Queue for backpressure isolation
         - type: queue
           properties:
             max-size-buffers: 5
             leaky: 2
 
-        # Face detection (PGIE)
         - type: nvinfer
           name: pgie
           config_file: "${PGIE_CONFIG:data/face/models/scrfd640/infer.txt}"
 
-        # Object tracking
         - type: nvtracker
           name: tracker
           config_file: "${TRACKER_CONFIG:data/face/models/NvDCF/config_tracker.txt}"
           probes:
             src: tracker_probe
 
-        # Face embedding (SGIE)
         - type: nvinfer
           name: sgie
           config_file: "${SGIE_CONFIG:data/face/models/arcface/infer.txt}"
           probes:
             src: sgie_probe
 
-        # Output queue
         - type: queue
           properties:
             max-size-buffers: 3
             leaky: 2
 
-        # Tile multiple streams
         - type: nvmultistreamtiler
           name: tiler
           properties:
@@ -81,7 +83,6 @@ pipeline:
             width: 1920
             height: 1080
 
-        # Draw bounding boxes
         - type: nvdsosd
           properties:
             process-mode: 0
@@ -89,9 +90,17 @@ pipeline:
           probes:
             src: fps_probe
 
-    # Branch 2: Face Detection Only (PGIE only, no tracking/recognition)
+    # -----------------------------------------------------------------------
+    # Branch 2: Face Detection Only (PGIE only)
+    # Output: {output.dir}/output_detection.avi (or override below)
+    # -----------------------------------------------------------------------
     detection:
       max_cameras: 8
+
+      # Optional: Override output for this branch
+      # sink:
+      #   type: fakesink      # Use fakesink to discard output
+      #   location: /home/mq/disk2T/quangnv/face/data/my_detection.mp4  # Custom file
 
       muxer:
         batch-size: 8
@@ -102,24 +111,20 @@ pipeline:
         nvbuf-memory-type: 0
 
       elements:
-        # Queue for backpressure isolation
         - type: queue
           properties:
             max-size-buffers: 5
             leaky: 2
 
-        # Face detection (PGIE)
         - type: nvinfer
           name: pgie
           config_file: "${PGIE_CONFIG:data/face/models/scrfd640/infer.txt}"
 
-        # Output queue
         - type: queue
           properties:
             max-size-buffers: 3
             leaky: 2
 
-        # Tile multiple streams
         - type: nvmultistreamtiler
           name: tiler
           properties:
@@ -128,29 +133,39 @@ pipeline:
             width: 1920
             height: 1080
 
-        # Draw bounding boxes
         - type: nvdsosd
           properties:
             process-mode: 0
             display-text: 1
 
 # =============================================================================
-# Sink Configuration (per branch)
+# Video Output Configuration
 # =============================================================================
-sink:
-  # Default sink type for all branches
-  type: "${OUTPUT_MODE:fakesink}"
-
-  fakesink:
-    sync: false
-
-  webrtc:
-    ws_url: "${WS_URL:ws://192.168.6.16:8555}"
-    peer_id: "1"
+# Each branch can use different sink type: filesink, fakesink, webrtc, etc.
+#
+# Output file naming: {dir}/{prefix}_{branch_name}.{extension}
+#
+# Examples:
+#   filesink: {dir}/output_recognition.avi
+#   fakesink: No output file (discard frames)
+#
+# Override per branch in branch config:
+#   recognition:
+#     sink:
+#       type: filesink
+#       location: /path/to/recognition.avi
+# =============================================================================
+output:
+  dir: "${OUTPUT_DIR:/home/mq/disk2T/quangnv/face/data}"
+  prefix: "output"
+  extension: "avi"
+  type: "${OUTPUT_TYPE:filesink}"
+  sync: false
 
 # =============================================================================
 # Camera REST API Configuration
 # =============================================================================
 camera_api:
   host: "${API_HOST:0.0.0.0}"
-  port: "${API_PORT:8080}"
+  port: "${API_PORT:8083}"
+

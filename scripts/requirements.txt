@@ -1,3 +1,5 @@
 opencv-python
 onnxruntime
 scikit-image
+fastapi 
+uvicorn

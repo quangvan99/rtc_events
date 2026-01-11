@@ -80,16 +80,23 @@ class TeeFanoutPipelineBuilder:
         pipeline.set_state(Gst.State.PLAYING)
     """
 
-    def __init__(self, config: dict, branch_sinks: dict[str, BaseSink]):
+    def __init__(
+        self,
+        config: dict,
+        branch_sinks: dict[str, BaseSink] = None
+    ):
         """
         Initialize builder
 
         Args:
-            config: Pipeline configuration dict with 'pipeline.branches' section
-            branch_sinks: Mapping branch_name -> BaseSink adapter
+            config: Pipeline configuration dict with 'pipeline.branches' and 'output' sections
+            branch_sinks: Optional mapping branch_name -> BaseSink adapter
         """
+        from sinks.filesink_adapter import FilesinkAdapter
+        from sinks.fakesink_adapter import FakesinkAdapter
+        import os
+
         self.config = config
-        self.branch_sinks = branch_sinks
         self.probe_registry = ProbeRegistry()
 
         self.pipeline: Optional[Gst.Pipeline] = None
@@ -97,7 +104,36 @@ class TeeFanoutPipelineBuilder:
         self.elements: list[Gst.Element] = []
         self.named_elements: dict[str, Gst.Element] = {}
         self._counter = 0
-        self.camera_manager = None  # Set in Phase 2
+        self.camera_manager = None
+
+        if branch_sinks:
+            self.branch_sinks = branch_sinks
+        else:
+            output_config = config.get("output", {})
+            output_dir = output_config.get("dir", "/home/mq/disk2T/quangnv/face/data")
+            prefix = output_config.get("prefix", "output")
+            extension = output_config.get("extension", "avi")
+            output_type = output_config.get("type", "filesink")
+            sync = output_config.get("sync", False)
+            os.makedirs(output_dir, exist_ok=True)
+
+            branches_cfg = config.get("pipeline", {}).get("branches", {})
+            self.branch_sinks = {}
+
+            for name, branch_cfg in branches_cfg.items():
+                sink_cfg = branch_cfg.get("sink", {})
+
+                if sink_cfg:
+                    sink_type = sink_cfg.get("type", output_type)
+                    location = sink_cfg.get("location")
+                else:
+                    sink_type = output_type
+                    location = f"{output_dir}/{prefix}_{name}.{extension}" if sink_type == "filesink" else None
+
+                if sink_type == "filesink" and location:
+                    self.branch_sinks[name] = FilesinkAdapter(location=location)
+                else:
+                    self.branch_sinks[name] = FakesinkAdapter()
 
     def build(self) -> Gst.Pipeline:
         """
