@@ -51,13 +51,16 @@ pipeline:
         - type: nvtracker
           name: tracker
           config_file: "data/face/models/NvDCF/config_tracker.txt"
+          probes: {src: tracker_probe}
         - type: nvinfer
           name: sgie
           config_file: "data/face/models/arcface/infer.txt"
+          probes: {src: sgie_probe}
         - type: nvmultistreamtiler
           properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
         - type: nvdsosd
           properties: { process-mode: 0, display-text: 1 }
+          probes: {src: fps_probe}
 
     # -----------------------------------------------------------------------
     # Branch 2: Face Detection -> Ví dụ: Stream RTSP (Khác với bên trên)
@@ -99,3 +102,4 @@ pipeline:
           properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
         - type: nvdsosd
           properties: { process-mode: 0, display-text: 1 }
+          probes: {src: fps_probe}
