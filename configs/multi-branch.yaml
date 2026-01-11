@@ -1,97 +1,9 @@
-# =============================================================================
-# Global Settings (Common)
-# =============================================================================
 camera_api:
   host: "${API_HOST:0.0.0.0}"
   port: "${API_PORT:8083}"
 
-# Cấu hình Face Rec cho thuật toán
-recognition_params:
-  features_json: "${FEATURES_JSON:data/face/features.json}"
-  l2_threshold: 1.0
-  min_streak: 3
-
-# =============================================================================
-# Pipeline Definition
-# =============================================================================
 pipeline:
   name: multi-branch-tee-pipeline
-
   branches:
-    # -----------------------------------------------------------------------
-    # Branch 1: Face Recognition -> Lưu ra file AVI
-    # -----------------------------------------------------------------------
-    recognition:
-      max_cameras: 8
-      
-      # [NEW] Định nghĩa Sink (Output) rõ ràng tại đây
-      sink:
-        enable: true
-        type: filesink   # Các loại: filesink, fakesink, rtsp, display
-        properties:
-          location: "${OUTPUT_DIR:data/face/output_recognition.avi}"
-          sync: false
-          qos: false
-          # Nếu dùng rtsp thì thêm port, bitrate, v.v. ở đây
-
-      muxer:
-        batch-size: 8
-        width: 1920
-        height: 1080
-        nvbuf-memory-type: 0
-        batched-push-timeout: 40000
-        live-source: 1
-
-      elements:
-        - type: queue
-        - type: nvinfer
-          name: pgie
-          config_file: "data/face/models/scrfd640/infer.txt"
-        - type: nvtracker
-          name: tracker
-          config_file: "data/face/models/NvDCF/config_tracker.txt"
-          probes: {src: tracker_probe}
-        - type: nvinfer
-          name: sgie
-          config_file: "data/face/models/arcface/infer.txt"
-          probes: {src: sgie_probe}
-        - type: nvmultistreamtiler
-          properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
-        - type: nvdsosd
-          properties: { process-mode: 0, display-text: 1 }
-          probes: {src: fps_probe}
-
-    # -----------------------------------------------------------------------
-    # Branch 2: Face Detection -> Ví dụ: Stream RTSP (Khác với bên trên)
-    # -----------------------------------------------------------------------
-    detection:
-      max_cameras: 8
-
-      # [NEW] Output khác hoàn toàn so với branch 1
-      sink:
-        enable: true
-        type: filesink   # Các loại: filesink, fakesink, rtsp, display
-        properties:
-          location: "${OUTPUT_DIR:data/face/output_detection.avi}"
-          sync: false
-          qos: false
-          # Nếu dùng rtsp thì thêm port, bitrate, v.v. ở đây
-
-      muxer:
-        batch-size: 8
-        width: 1920
-        height: 1080
-        nvbuf-memory-type: 0
-        batched-push-timeout: 40000
-        live-source: 1
-
-      elements:
-        - type: queue
-        - type: nvinfer
-          name: pgie
-          config_file: "data/face/models/scrfd640/infer.txt"
-        - type: nvmultistreamtiler
-          properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
-        - type: nvdsosd
-          properties: { process-mode: 0, display-text: 1 }
-          probes: {src: fps_probe}
+    recognition: apps/face/config.yaml
+    detection: apps/detection/config.yaml

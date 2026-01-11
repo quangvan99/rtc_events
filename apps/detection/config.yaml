@@ -1,0 +1,27 @@
+sink:
+  enable: true
+  type: filesink   # Các loại: filesink, fakesink, rtsp, display
+  properties:
+    location: "${OUTPUT_DIR:data/face/output_detection.avi}"
+    sync: false
+    qos: false
+    # Nếu dùng rtsp thì thêm port, bitrate, v.v. ở đây
+
+muxer:
+  batch-size: 8
+  width: 1920
+  height: 1080
+  nvbuf-memory-type: 0
+  batched-push-timeout: 40000
+  live-source: 1
+
+elements:
+  - type: queue
+  - type: nvinfer
+    name: pgie
+    config_file: "data/face/models/scrfd640/infer.txt"
+  - type: nvmultistreamtiler
+    properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
+  - type: nvdsosd
+    properties: { process-mode: 0, display-text: 1 }
+    probes: {src: fps_probe}
