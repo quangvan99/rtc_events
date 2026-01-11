@@ -24,4 +24,4 @@ elements:
     properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
   - type: nvdsosd
     properties: { process-mode: 0, display-text: 1 }
-    probes: {src: fps_probe}
+    probes: {src: detection_fps_probe}

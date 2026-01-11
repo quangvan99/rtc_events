@@ -375,7 +375,7 @@ class FaceRecognitionProcessor(BranchProcessor):
         return {
             "tracker_probe": self._tracker_probe,
             "sgie_probe": self._sgie_probe,
-            "fps_probe": fps_probe_factory(
+            "recognition_fps_probe": fps_probe_factory(
                 name="Recognition",
                 log_interval=params.get("log_interval", 1.0),
                 stats_interval=params.get("stats_interval", 10.0),
@@ -477,6 +477,18 @@ class FaceRecognitionProcessor(BranchProcessor):
         if self._cleanup_runner:
             self._cleanup_runner.stop()
         print("[FaceRecognitionProcessor] Stopped")
+
+    def get_stats(self) -> Optional[Dict[str, Any]]:
+        """Return processor statistics"""
+        if not self._trackers:
+            return None
+        total, confirmed, pending = self._trackers.stats()
+        return {
+            "faces_in_database": len(self._db.names) if self._db else 0,
+            "trackers_total": total,
+            "trackers_confirmed": confirmed,
+            "trackers_pending": pending,
+        }
 
     @property
     def database(self) -> Optional[FaceDatabase]:

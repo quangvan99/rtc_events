@@ -7,7 +7,7 @@ Provides basic detection with FPS monitoring and statistics.
 This processor is auto-registered with ProcessorRegistry using the @register decorator.
 """
 
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Optional
 
 import gi
 gi.require_version("Gst", "1.0")
@@ -93,7 +93,7 @@ class DetectionProcessor(BranchProcessor):
     def get_probes(self) -> Dict[str, Callable]:
         params = self._config.get("params", {})
         return {
-            "fps_probe": fps_probe_factory(
+            "detection_fps_probe": fps_probe_factory(
                 name="Detection",
                 log_interval=params.get("log_interval", 1.0),
                 stats_interval=params.get("stats_interval", 10.0),
@@ -123,3 +123,14 @@ class DetectionProcessor(BranchProcessor):
 
     def on_stop(self) -> None:
         print(f"[DetectionProcessor] Stopped - frames={self._total_frames}, objects={self._total_objects}")
+
+    def get_stats(self) -> Optional[Dict[str, Any]]:
+        """Return processor statistics"""
+        avg_objects = self._total_objects / max(self._total_frames, 1)
+        current_fps = 0
+        return {
+            "total_frames": self._total_frames,
+            "total_objects": self._total_objects,
+            "avg_objects_per_frame": avg_objects,
+            "current_fps": current_fps,
+        }

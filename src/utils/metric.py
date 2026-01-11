@@ -108,7 +108,11 @@ def fps_probe_factory(
     from src.utils.extractors import get_batch_meta
     
     def fps_probe(pad, info, user_data) -> Gst.PadProbeReturn:
-        batch = get_batch_meta(info.get_buffer())
+        buffer = info.get_buffer()
+        if not buffer:
+            return Gst.PadProbeReturn.OK
+        
+        batch = get_batch_meta(buffer)
         if not batch:
             return Gst.PadProbeReturn.OK
         
@@ -122,6 +126,7 @@ def fps_probe_factory(
         
         return Gst.PadProbeReturn.OK
     
+    print(f"[fps_probe_factory] Created probe for '{name}'")
     return fps_probe
 
 
