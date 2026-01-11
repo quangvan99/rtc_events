@@ -1,13 +1,10 @@
 """Face recognition probe callbacks for multi-camera DeepStream pipeline"""
 
-import ctypes
 import time
 from typing import Optional
 
-import numpy as np
 import pyds
 import gi
-
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
@@ -16,10 +13,10 @@ from apps.face.tracker import TrackerManager
 from apps.face.display import FaceDisplay
 from apps.face.events import FaceEventEmitter
 from src.sinks.base_sink import BaseSink
-
-
-# Skip SGIE for faces with this component ID
-SKIP_SGIE_COMPONENT_ID = 100
+from src.extractors import (
+    extract_embedding,
+    SKIP_SGIE_COMPONENT_ID,
+)
 
 
 class FaceProbes:
@@ -67,24 +64,9 @@ class FaceProbes:
     # Core logic
     # =========================================================================
 
-    def _extract_embedding(self, obj_meta) -> np.ndarray | None:
+    def _extract_embedding(self, obj_meta):
         """Extract 512-dim L2-normalized embedding from SGIE tensor"""
-        l_user = obj_meta.obj_user_meta_list
-        while l_user:
-            try:
-                user_meta = pyds.NvDsUserMeta.cast(l_user.data)
-                if user_meta.base_meta.meta_type == pyds.NvDsMetaType.NVDSINFER_TENSOR_OUTPUT_META:
-                    tensor = pyds.NvDsInferTensorMeta.cast(user_meta.user_meta_data)
-                    layer = pyds.get_nvds_LayerInfo(tensor, 0)
-                    if layer:
-                        ptr = ctypes.cast(pyds.get_ptr(layer.buffer), ctypes.POINTER(ctypes.c_float))
-                        emb = np.ctypeslib.as_array(ptr, shape=(512,)).copy()
-                        norm = np.linalg.norm(emb)
-                        return emb / norm if norm > 0 else emb
-                l_user = l_user.next
-            except StopIteration:
-                break
-        return None
+        return extract_embedding(obj_meta)
 
     def _process_face(self, source_id: int, obj_meta, frame: int) -> tuple[str, str, float]:
         """Process face and return (name, state, score) for display
@@ -123,6 +105,8 @@ class FaceProbes:
 
     def tracker_probe(self, pad, info, user_data) -> Gst.PadProbeReturn:
         """Decide whether to skip SGIE for each face"""
+        from src.extractors import iterate_frame_metas, iterate_object_metas, get_source_id, get_frame_num
+        
         buf = info.get_buffer()
         if not buf:
             return Gst.PadProbeReturn.OK
@@ -133,40 +117,26 @@ class FaceProbes:
 
         min_face = self.config.get("min_face_size", 50)
 
-        l_frame = batch.frame_meta_list
-        while l_frame:
-            try:
-                frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
-                source_id = frame_meta.source_id  # Extract source_id
-                frame = frame_meta.frame_num
+        for frame_meta in iterate_frame_metas(batch):
+            source_id = get_source_id(frame_meta)
+            frame = get_frame_num(frame_meta)
 
-                l_obj = frame_meta.obj_meta_list
-                while l_obj:
-                    try:
-                        obj = pyds.NvDsObjectMeta.cast(l_obj.data)
-                        rect = obj.rect_params
+            for obj in iterate_object_metas(frame_meta):
+                rect = obj.rect_params
+                skip = rect.width < min_face or rect.height < min_face
+                if not skip:
+                    trk = self.trackers.get(source_id, obj.object_id)
+                    skip = trk and not trk.should_run_sgie(frame)
 
-                        # Skip: small face OR tracker says skip
-                        skip = rect.width < min_face or rect.height < min_face
-                        if not skip:
-                            # Pass source_id to get()
-                            trk = self.trackers.get(source_id, obj.object_id)
-                            skip = trk and not trk.should_run_sgie(frame)
-
-                        if skip:
-                            obj.unique_component_id = SKIP_SGIE_COMPONENT_ID
-
-                        l_obj = l_obj.next
-                    except StopIteration:
-                        break
-                l_frame = l_frame.next
-            except StopIteration:
-                break
+                if skip:
+                    obj.unique_component_id = SKIP_SGIE_COMPONENT_ID
 
         return Gst.PadProbeReturn.OK
 
     def sgie_probe(self, pad, info, user_data) -> Gst.PadProbeReturn:
         """Process face recognition results and update display"""
+        from src.extractors import iterate_frame_metas, iterate_object_metas, get_source_id
+        
         buf = info.get_buffer()
         if not buf:
             return Gst.PadProbeReturn.OK
@@ -175,33 +145,17 @@ class FaceProbes:
         if not batch:
             return Gst.PadProbeReturn.OK
 
-        l_frame = batch.frame_meta_list
-        while l_frame:
-            try:
-                frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
-                source_id = frame_meta.source_id  # Extract source_id
+        for frame_meta in iterate_frame_metas(batch):
+            source_id = get_source_id(frame_meta)
 
-                # Debug: log source_id from DeepStream
-                if self.source_mapper:
-                    camera_id = self.source_mapper.get_camera_id(source_id)
-                    if frame_meta.frame_num % 300 == 0:  # Log every 10s at 30fps
-                        print(f"[DEBUG] Frame from source_id={source_id} -> camera_id={camera_id}")
+            if self.source_mapper:
+                camera_id = self.source_mapper.get_camera_id(source_id)
+                if frame_meta.frame_num % 300 == 0:
+                    print(f"[DEBUG] Frame from source_id={source_id} -> camera_id={camera_id}")
 
-                l_obj = frame_meta.obj_meta_list
-                while l_obj:
-                    try:
-                        obj = pyds.NvDsObjectMeta.cast(l_obj.data)
-                        # Pass source_id to _process_face
-                        name, state, score = self._process_face(
-                            source_id, obj, frame_meta.frame_num
-                        )
-                        self.display.update(obj, name, score, state)
-                        l_obj = l_obj.next
-                    except StopIteration:
-                        break
-                l_frame = l_frame.next
-            except StopIteration:
-                break
+            for obj in iterate_object_metas(frame_meta):
+                name, state, score = self._process_face(source_id, obj, frame_meta.frame_num)
+                self.display.update(obj, name, score, state)
 
         return Gst.PadProbeReturn.OK
 

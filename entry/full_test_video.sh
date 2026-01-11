@@ -19,7 +19,7 @@ fi
 echo "=== Cleaning up existing processes ==="
 docker exec -w "$PROJECT_DIR" "$DOCKER_CONTAINER" bash -c "
     pkill -9 -f 'python.*test_multi' 2>/dev/null || true
-    pkill -9 -f 'bin/test_multi_branch' 2>/dev/null || true
+    pkill -9 -f 'entry/test_multi_branch' 2>/dev/null || true
     sleep 2
 " 2>/dev/null
 
@@ -42,7 +42,7 @@ check_health() {
 start_pipeline() {
     docker exec -d -w "$PROJECT_DIR" "$DOCKER_CONTAINER" bash -c "
         cd $PROJECT_DIR
-        nohup python3 bin/test_multi_branch_video.py > /tmp/full_test.log 2>&1 &
+        nohup python3 entry/test_multi_branch_video.py > /tmp/full_test.log 2>&1 &
         echo \$!
     "
 }

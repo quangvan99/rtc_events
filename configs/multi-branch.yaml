@@ -1,16 +1,15 @@
 # =============================================================================
 # Global Settings (Common)
 # =============================================================================
-common:
-  camera_api:
-    host: "${API_HOST:0.0.0.0}"
-    port: "${API_PORT:8083}"
-  
-  # Cấu hình Face Rec cho thuật toán (không liên quan pipeline)
-  recognition_params:
-    features_json: "${FEATURES_JSON:data/face/features.json}"
-    l2_threshold: 1.0
-    min_streak: 3
+camera_api:
+  host: "${API_HOST:0.0.0.0}"
+  port: "${API_PORT:8083}"
+
+# Cấu hình Face Rec cho thuật toán
+recognition_params:
+  features_json: "${FEATURES_JSON:data/face/features.json}"
+  l2_threshold: 1.0
+  min_streak: 3
 
 # =============================================================================
 # Pipeline Definition
@@ -77,13 +76,6 @@ pipeline:
           sync: false
           qos: false
           # Nếu dùng rtsp thì thêm port, bitrate, v.v. ở đây
-
-      
-      # Hoặc nếu muốn lưu file thì đổi lại thành filesink như trên:
-      # sink:
-      #   type: filesink
-      #   properties:
-      #     location: "data/output_detection.mp4"
 
       muxer:
         batch-size: 8

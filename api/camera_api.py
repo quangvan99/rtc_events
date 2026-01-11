@@ -25,8 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-if TYPE_CHECKING:
-    from src.multibranch_camera_manager import MultibranchCameraManager
+from api.shutdown import stop_event
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +35,13 @@ class CameraAPIServer:
 
     def __init__(
         self,
-        manager: "MultibranchCameraManager",
-        host: str = "0.0.0.0",
-        port: int = 8080,
-        shutdown_event=None
+        cfg,
+        manager,
     ):
         self.manager = manager
-        self.host = host
-        self.port = port
-        self.shutdown_event = shutdown_event
+        self.host = cfg.get("host", "0.0.0.0")
+        self.port = cfg.get("port", 8083)
+        self.shutdown_event = stop_event
         self.op_queue = queue.Queue()
         self.op_results = {}
         self.op_lock = threading.Lock()
