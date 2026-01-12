@@ -137,7 +137,11 @@ echo "=== Wait 10s for video processing ==="
 sleep 10
 
 echo "=== Video Files ==="
-ls -lh "$PROJECT_DIR/data/face/output_*.avi" 2>/dev/null || echo "No output files"
+docker exec -w "$PROJECT_DIR" "$DOCKER_CONTAINER" bash -c "
+    cd $PROJECT_DIR
+    ls -lh data/face/output*
+"
+
 
 echo ""
 echo "=== Log (last 30 lines) ==="

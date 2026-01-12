@@ -13,11 +13,9 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
-from src.interfaces import BranchProcessor
-from src.registry import ProcessorRegistry
+from src.core.processor_registry import ProcessorRegistry
 from src.sinks.base_sink import BaseSink
-from src.utils.extractors import BatchIterator, get_batch_meta
-from src.utils.metric import fps_probe_factory
+from src.common import BatchIterator, get_batch_meta, fps_probe_factory
 
 
 COLOR_TEXT = (1.0, 1.0, 1.0, 1.0)
@@ -51,7 +49,7 @@ def update_display(obj_meta, detection_count: int, score: float = 0.0) -> None:
 
 
 @ProcessorRegistry.register("detection")
-class DetectionProcessor(BranchProcessor):
+class DetectionProcessor:
     """
     Object detection branch processor implementation.
     

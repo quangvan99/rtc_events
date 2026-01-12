@@ -4,7 +4,7 @@ Multi-Branch Pipeline - Clean Architecture with Auto-Discovery
 
 This entry point demonstrates the cleanest usage pattern:
 - ProcessorRegistry auto-discovers processors from apps/
-- TeeFanoutPipelineBuilder auto-creates processors for configured branches
+- PipelineBuilder auto-creates processors for configured branches
 - No explicit processor imports or instantiation needed
 
 Usage:
@@ -20,9 +20,9 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
 # Import directly from modules (no __init__.py)
-from src.core.pipeline_builder import TeeFanoutPipelineBuilder, BranchInfo
+from src.core.pipeline_builder import PipelineBuilder
 from src.core.camera_manager import MultibranchCameraManager
-from src.utils.config import load_config
+from src.common import load_config
 from api.camera_api import CameraAPIServer
 from api.shutdown import setup_signal_handlers, wait_for_shutdown
 
@@ -46,7 +46,7 @@ def main():
     config = load_config(args.config)
     print(f"[Config] Loaded: {args.config}")
 
-    builder = TeeFanoutPipelineBuilder(config)
+    builder = PipelineBuilder(config)
 
     # Build pipeline
     pipeline = builder.build()
@@ -97,7 +97,7 @@ def main():
     return 0
 
 
-def _display_processor_info(builder: TeeFanoutPipelineBuilder) -> None:
+def _display_processor_info(builder: PipelineBuilder) -> None:
     """Display information from processors after startup."""
     print("\n" + "=" * 60)
     print(f"[Processors] Active: {list(builder.processors.keys())}")
@@ -115,7 +115,7 @@ def _display_processor_info(builder: TeeFanoutPipelineBuilder) -> None:
     print("=" * 60)
 
 
-def _display_final_stats(builder: TeeFanoutPipelineBuilder) -> None:
+def _display_final_stats(builder: PipelineBuilder) -> None:
     """Display final statistics from all processors."""
     stats = builder.get_processor_stats()
     if stats:

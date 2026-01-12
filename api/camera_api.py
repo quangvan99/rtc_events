@@ -101,7 +101,7 @@ class CameraAPIServer:
         async def list_branches():
             branches = {}
             for name, info in self.manager.branches.items():
-                cams = [cid for cid, cam in self.manager._cameras.items() if name in cam.branch_queues]
+                cams = [cid for cid, cam in self.manager._cameras.items() if name in cam.get("branch_pads", {})]
                 branches[name] = {"max_cameras": info.max_cameras, "current_cameras": cams}
             return {"branches": branches}
 

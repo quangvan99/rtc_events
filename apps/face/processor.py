@@ -4,7 +4,7 @@ Face Recognition Processor - Simplified Module
 This module contains face recognition components with minimal class usage:
 - FaceDatabase: Face feature storage and matching
 - TrackedFace/TrackerManager: Identity tracking (dataclass + manager)
-- FaceRecognitionProcessor: Main BranchProcessor with probes
+- FaceRecognitionProcessor: Main processor with probes
 
 Auto-registered with ProcessorRegistry using @register decorator.
 """
@@ -20,11 +20,9 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
-from src.interfaces import BranchProcessor
-from src.registry import ProcessorRegistry
+from src.core.processor_registry import ProcessorRegistry
 from src.sinks.base_sink import BaseSink
-from src.utils.extractors import BatchIterator, extract_embedding, get_batch_meta
-from src.utils.metric import fps_probe_factory, IntervalRunner
+from src.common import BatchIterator, extract_embedding, get_batch_meta, fps_probe_factory, IntervalRunner
 
 
 # =============================================================================
@@ -316,7 +314,7 @@ class EventSet:
 # =============================================================================
 
 @ProcessorRegistry.register("recognition")
-class FaceRecognitionProcessor(BranchProcessor):
+class FaceRecognitionProcessor:
     """
     Face recognition processor - all-in-one implementation.
     
