@@ -118,7 +118,12 @@ curl -s -X DELETE http://localhost:$PORT/api/cameras/cam2/branches/detection
 echo ""
 sleep 5
 
-echo "=== Step 4: Add cam3 ==="
+echo "=== Step 4: Remove cam1 from recognition ==="
+curl -s -X DELETE http://localhost:$PORT/api/cameras/cam1/branches/recognition
+echo ""
+sleep 5
+
+echo "=== Step 5: Add cam3 ==="
 curl -s -X POST http://localhost:$PORT/api/cameras -H "Content-Type: application/json" \
      -d '{"camera_id": "cam3", "uri": "rtsp://192.168.6.14:8554/test", "branches": ["recognition", "detection"]}'
 echo ""

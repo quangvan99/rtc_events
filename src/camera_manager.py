@@ -103,11 +103,12 @@ class MultibranchCameraManager:
                     pad.add_probe(Gst.PadProbeType.BLOCK_DOWNSTREAM, lambda *_: Gst.PadProbeReturn.REMOVE)
                 time.sleep(0.2)
 
+                cam["bin"].set_state(Gst.State.NULL)
+                cam["bin"].get_state(Gst.CLOCK_TIME_NONE)
+
                 for b in list(cam["branch_pads"].keys()):
                     self._unlink_branch(cam, b, camera_id)
 
-                cam["bin"].set_state(Gst.State.NULL)
-                cam["bin"].get_state(Gst.CLOCK_TIME_NONE)
                 self.pipeline.remove(cam["bin"])
                 self._mapper.remove(camera_id)
                 del self._cameras[camera_id]
@@ -140,19 +141,44 @@ class MultibranchCameraManager:
         with self._lock:
             self._delay()
             cam = self._cameras.get(camera_id)
-            if not cam or branch_name not in cam["branch_pads"] or len(cam["branch_pads"]) == 1:
+            if not cam:
+                logger.warning(f"[CAM-MANAGER] remove_camera_from_branch: camera {camera_id} not found. Existing: {list(self._cameras.keys())}")
+                return False
+            if branch_name not in cam["branch_pads"]:
+                logger.warning(f"[CAM-MANAGER] remove_camera_from_branch: camera {camera_id} not in branch {branch_name}. Branches: {list(cam['branch_pads'].keys())}")
+                return False
+            if len(cam["branch_pads"]) <= 1:
+                logger.info(f"[CAM-MANAGER] remove_camera_from_branch: camera {camera_id} has only {len(cam['branch_pads'])} branch(s), use remove_camera instead")
                 return False
 
+            logger.info(f"[CAM-MANAGER] Starting to remove {camera_id} from branch {branch_name}")
             try:
-                cam["branch_pads"][branch_name].add_probe(
-                    Gst.PadProbeType.BLOCK_DOWNSTREAM, lambda *_: Gst.PadProbeReturn.REMOVE
-                )
-                time.sleep(0.2)
-                self._unlink_branch(cam, branch_name, camera_id)
+                tee_pad = cam["branch_pads"].get(branch_name)
+
+                # Step 1: Block the tee src pad to stop data flow
+                blocked = threading.Event()
+                probe_id = None
+
+                def block_probe(pad, info):
+                    blocked.set()
+                    return Gst.PadProbeReturn.OK  # Keep blocking until we remove the probe
+
+                if tee_pad:
+                    logger.debug(f"[CAM-MANAGER] Adding block probe to tee pad for {camera_id}/{branch_name}")
+                    probe_id = tee_pad.add_probe(Gst.PadProbeType.BLOCK_DOWNSTREAM, block_probe)
+                    # Wait for probe to trigger (data flow blocked)
+                    blocked.wait(timeout=1.0)
+
+                logger.debug(f"[CAM-MANAGER] Data flow blocked, proceeding with unlink")
+
+                # Step 2: Unlink the branch elements (safe now that data is blocked)
+                self._unlink_branch_safe(cam, branch_name, camera_id, tee_pad, probe_id)
+
                 self._last_op = time.time()
+                logger.info(f"[CAM-MANAGER] Successfully removed {camera_id} from branch {branch_name}")
                 return True
             except Exception as e:
-                logger.error(f"remove_camera_from_branch failed: {e}")
+                logger.error(f"[CAM-MANAGER] remove_camera_from_branch failed: {e}", exc_info=True)
                 return False
 
     def _link_branch(self, bin_elem, tee, camera_id, source_id, branch_name, sync=False) -> Gst.Pad:
@@ -180,8 +206,7 @@ class MultibranchCameraManager:
         caps.link(q)
 
         mux_sink = b.nvstreammux.request_pad_simple(f"sink_{source_id}")
-        self._pad_counter += 1
-        ghost = Gst.GhostPad.new(f"g_{branch_name}_{self._pad_counter}", q.get_static_pad("src"))
+        ghost = Gst.GhostPad.new(f"g_{branch_name}_{camera_id}", q.get_static_pad("src"))
         bin_elem.add_pad(ghost)
         ghost.link(mux_sink)
 
@@ -192,17 +217,115 @@ class MultibranchCameraManager:
 
         return tee_src
 
-    def _unlink_branch(self, cam: dict, branch_name: str, camera_id: str) -> None:
-        """Unlink and cleanup branch elements."""
+    def _unlink_branch_safe(self, cam: dict, branch_name: str, camera_id: str,
+                            tee_pad: Optional[Gst.Pad] = None, probe_id: Optional[int] = None) -> None:
+        """Safely unlink and cleanup branch elements with proper synchronization.
+
+        This method should be called when data flow is already blocked.
+        """
         b = self.branches.get(branch_name)
         if not b:
+            logger.warning(f"_unlink_branch_safe: branch {branch_name} not found")
             return
 
-        # Remove ghost pad
+        # Get elements to remove
+        elements = []
+        for prefix in ["nv", "caps", "q"]:
+            elem = cam["bin"].get_by_name(f"{prefix}_{camera_id}_{branch_name}")
+            if elem:
+                elements.append(elem)
+
+        # Step 1: Unlink from nvstreammux first (while data is blocked)
+        ghost_pad = None
+        mux_pad = None
         it = cam["bin"].iterate_pads()
         while True:
             ret, pad = it.next()
-            if ret == Gst.IteratorResult.OK and pad.get_name().startswith(f"g_{branch_name}"):
+            # Look for ghost pad with this specific camera_id pattern
+            if ret == Gst.IteratorResult.OK and pad.get_name() == f"g_{branch_name}_{camera_id}":
+                ghost_pad = pad
+                mux_pad = pad.get_peer()
+                if mux_pad:
+                    pad.unlink(mux_pad)
+                break
+            elif ret == Gst.IteratorResult.RESYNC:
+                it.resync()
+            elif ret != Gst.IteratorResult.OK:
+                break
+
+        # Step 2: Unlink tee from nvvideoconvert
+        if tee_pad and elements:
+            nv_elem = cam["bin"].get_by_name(f"nv_{camera_id}_{branch_name}")
+            if nv_elem:
+                nv_sink = nv_elem.get_static_pad("sink")
+                if nv_sink and nv_sink.is_linked():
+                    peer = nv_sink.get_peer()
+                    if peer:
+                        peer.unlink(nv_sink)
+
+        # Step 3: Remove probe (allow any pending data to flush)
+        if tee_pad and probe_id is not None:
+            tee_pad.remove_probe(probe_id)
+
+        # Small delay to let any in-flight data clear
+        time.sleep(0.1)
+
+        # Step 4: Set elements to NULL state and remove them
+        for elem in elements:
+            elem.set_state(Gst.State.NULL)
+            elem.get_state(Gst.CLOCK_TIME_NONE)
+
+        time.sleep(0.05)
+
+        for elem in elements:
+            cam["bin"].remove(elem)
+
+        # Step 5: Remove ghost pad from bin
+        if ghost_pad:
+            cam["bin"].remove_pad(ghost_pad)
+
+        # Step 6: Release the nvstreammux sink pad
+        if mux_pad:
+            try:
+                b.nvstreammux.release_request_pad(mux_pad)
+            except Exception as e:
+                logger.warning(f"release nvstreammux pad failed: {e}")
+
+        # Step 7: Release the tee src pad
+        if tee_pad:
+            try:
+                cam["tee"].release_request_pad(tee_pad)
+            except Exception as e:
+                logger.warning(f"release tee pad failed: {e}")
+
+        cam["branch_pads"].pop(branch_name, None)
+        logger.info(f"Safely unlinked {camera_id} from branch {branch_name}")
+
+    def _unlink_branch(self, cam: dict, branch_name: str, camera_id: str) -> None:
+        """Unlink and cleanup branch elements (legacy - for remove_camera)."""
+        b = self.branches.get(branch_name)
+        if not b:
+            logger.warning(f"_unlink_branch: branch {branch_name} not found")
+            return
+
+        tee_pad = cam["branch_pads"].get(branch_name)
+
+        for prefix in ["q", "caps", "nv"]:
+            elem = cam["bin"].get_by_name(f"{prefix}_{camera_id}_{branch_name}")
+            if elem:
+                elem.set_state(Gst.State.NULL)
+
+        time.sleep(0.15)
+
+        for prefix in ["q", "caps", "nv"]:
+            elem = cam["bin"].get_by_name(f"{prefix}_{camera_id}_{branch_name}")
+            if elem:
+                cam["bin"].remove(elem)
+
+        it = cam["bin"].iterate_pads()
+        while True:
+            ret, pad = it.next()
+            if ret == Gst.IteratorResult.OK and pad.get_name() == f"g_{branch_name}_{camera_id}":
                 peer = pad.get_peer()
                 if peer:
                     pad.unlink(peer)
@@ -214,15 +337,14 @@ class MultibranchCameraManager:
             elif ret != Gst.IteratorResult.OK:
                 break
 
-        # Remove elements
-        for prefix in ["q", "caps", "nv"]:
-            elem = cam["bin"].get_by_name(f"{prefix}_{camera_id}_{branch_name}")
-            if elem:
-                elem.set_state(Gst.State.NULL)
-                cam["bin"].remove(elem)
+        if tee_pad:
+            try:
+                cam["tee"].release_request_pad(tee_pad)
+            except Exception as e:
+                logger.warning(f"release_request_pad failed: {e}")
 
-        cam["tee"].release_request_pad(cam["branch_pads"][branch_name])
-        del cam["branch_pads"][branch_name]
+        cam["branch_pads"].pop(branch_name, None)
+        logger.info(f"Unlinked {camera_id} from branch {branch_name}")
 
     # Query methods
     def list_cameras(self) -> dict:

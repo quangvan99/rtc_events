@@ -144,8 +144,8 @@ sleep 3
 curl -X DELETE http://localhost:8083/api/cameras/cam2/branches/detection
 curl -X DELETE http://localhost:8083/api/cameras/cam1/branches/recognition
 
-# Add cam1 (đã tồn tại) vào branch mới, ví dụ "analysis"
-curl -X POST http://localhost:8083/api/cameras/cam1/branches/detection
+# Add cam1 (đã tồn tại) vào branch mới, ví dụ "recognition"
+curl -X POST http://localhost:8083/api/cameras/cam1/branches/recognition
 
 curl -X POST http://localhost:8083/api/cameras \
       -H "Content-Type: application/json" \

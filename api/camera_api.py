@@ -122,13 +122,6 @@ class CameraAPIServer:
             self.op_queue.put((op_id, self.manager.add_camera, (camera_id, uri, branches), {}))
             return {"status": "accepted", "operation_id": op_id}
 
-        @app.post("/api/cameras/{camera_id}/branches/{branch_name}")
-        async def add_camera_to_branch(camera_id: str, branch_name: str):
-            import uuid
-            op_id = str(uuid.uuid4())[:8]
-            self.op_queue.put((op_id, self.manager.add_camera_to_branch, (camera_id, branch_name), {}))
-            return {"status": "accepted", "operation_id": op_id}
-
         @app.post("/api/pipeline/kill")
         async def kill_pipeline():
             import uuid
@@ -148,6 +141,13 @@ class CameraAPIServer:
             import uuid
             op_id = str(uuid.uuid4())[:8]
             self.op_queue.put((op_id, self.manager.remove_camera, (camera_id,), {}))
+            return {"status": "accepted", "operation_id": op_id}
+
+        @app.post("/api/cameras/{camera_id}/branches/{branch_name}")
+        async def add_camera_to_branch(camera_id: str, branch_name: str):
+            import uuid
+            op_id = str(uuid.uuid4())[:8]
+            self.op_queue.put((op_id, self.manager.add_camera_to_branch, (camera_id, branch_name), {}))
             return {"status": "accepted", "operation_id": op_id}
 
         @app.delete("/api/cameras/{camera_id}/branches/{branch_name}")
