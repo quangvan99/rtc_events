@@ -20,7 +20,7 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
-from src.core.processor_registry import ProcessorRegistry
+from src.processor_registry import ProcessorRegistry
 from src.sinks.base_sink import BaseSink
 from src.common import BatchIterator, extract_embedding, get_batch_meta, fps_probe_factory, IntervalRunner
 

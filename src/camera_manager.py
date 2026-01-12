@@ -11,8 +11,8 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
-from src.core.pipeline_builder import BranchInfo
-from src.core.source_mapper import SourceIDMapper
+from src.pipeline_builder import BranchInfo
+from src.source_mapper import SourceIDMapper
 
 logger = logging.getLogger(__name__)
 

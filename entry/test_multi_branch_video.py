@@ -20,8 +20,8 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
 # Import directly from modules (no __init__.py)
-from src.core.pipeline_builder import PipelineBuilder
-from src.core.camera_manager import MultibranchCameraManager
+from src.pipeline_builder import PipelineBuilder
+from src.camera_manager import MultibranchCameraManager
 from src.common import load_config
 from api.camera_api import CameraAPIServer
 from api.shutdown import setup_signal_handlers, wait_for_shutdown
@@ -72,12 +72,11 @@ def main():
     builder.start_processors()
 
     # Start camera API server
-    camera_api_config = config.get("camera_api", {})
-    api = CameraAPIServer(camera_api_config, manager)
+    api = CameraAPIServer(config.get("camera_api", {}), manager)
     api.start()
 
     # Display processor-specific information
-    _display_processor_info(builder)
+    # _display_processor_info(builder)
 
     # Wait for shutdown signal
     wait_for_shutdown()

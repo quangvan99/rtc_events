@@ -20,9 +20,9 @@ if "/opt/nvidia/deepstream/deepstream/lib" not in sys.path:
 logger = logging.getLogger(__name__)
 
 from src.sinks.base_sink import BaseSink
-from src.core.probe_registry import ProbeRegistry
+from src.probe_registry import ProbeRegistry
 from src.common import load_config
-from src.core.processor_registry import ProcessorRegistry, BranchProcessor
+from src.processor_registry import ProcessorRegistry, BranchProcessor
 
 
 @dataclass

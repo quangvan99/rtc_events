@@ -1,6 +1,6 @@
 sink:
   enable: true
-  type: fakesink   # Các loại: filesink, fakesink, rtsp, display
+  type: filesink   # Các loại: filesink, fakesink, rtsp, display
   properties:
     location: "${OUTPUT_DIR:data/face/output_detection.avi}"
     sync: false
