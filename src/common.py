@@ -242,6 +242,7 @@ def fps_probe_factory(
         Probe callback function
     """
     monitor = FPSMonitor(name, log_interval, stats_interval, stats_callback)
+    call_count = [0]
     
     def fps_probe(pad, info, user_data) -> Gst.PadProbeReturn:
         buffer = info.get_buffer()
@@ -251,6 +252,10 @@ def fps_probe_factory(
         batch = get_batch_meta(buffer)
         if not batch:
             return Gst.PadProbeReturn.OK
+        
+        call_count[0] += 1
+        if call_count[0] <= 3:
+            print(f"[DEBUG] {name} probe called, batch={batch is not None}, count={call_count[0]}")
         
         monitor.on_frame()
         

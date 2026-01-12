@@ -90,9 +90,6 @@ def main():
     for sink in builder.branch_sinks.values():
         sink.stop()
     
-    # Display final stats
-    _display_final_stats(builder)
-    
     print("[Done]")
     return 0
 
@@ -113,19 +110,6 @@ def _display_processor_info(builder: PipelineBuilder) -> None:
         print("[Detection] Processor active")
     
     print("=" * 60)
-
-
-def _display_final_stats(builder: PipelineBuilder) -> None:
-    """Display final statistics from all processors."""
-    stats = builder.get_processor_stats()
-    if stats:
-        print("\n" + "=" * 60)
-        print("[Final Statistics]")
-        for name, proc_stats in stats.items():
-            print(f"\n  [{name}]")
-            for key, value in proc_stats.items():
-                print(f"    {key}: {value}")
-        print("=" * 60)
 
 
 if __name__ == "__main__":

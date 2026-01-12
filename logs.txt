@@ -169,10 +169,8 @@ ffmpeg -i /home/mq/disk2T/quangnv/face/data/output_detection.avi -c:v libx264 -p
 ffmpeg -i /home/mq/disk2T/quangnv/face/data/output_recognition.avi -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k /home/mq/disk2T/quangnv/face/data/output_recognition.mp4
 
 Usage:
-# Remove all cameras (keep pipeline running)
-curl -X POST http://localhost:8083/api/pipeline/kill
 
-# Stop the entire pipeline (shutdown application)
+curl -X POST http://localhost:8083/api/pipeline/kill
 curl -X POST http://localhost:8083/api/pipeline/stop
 
 
