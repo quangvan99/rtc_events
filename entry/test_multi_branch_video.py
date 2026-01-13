@@ -108,23 +108,5 @@ def main():
     return 0
 
 
-def _display_processor_info(builder: PipelineBuilder) -> None:
-    """Display information from processors after startup."""
-    print("\n" + "=" * 60)
-    print(f"[Processors] Active: {list(builder.processors.keys())}")
-
-    # Face recognition processor info
-    face_proc = builder.get_processor("recognition")
-    if face_proc and hasattr(face_proc, 'database') and face_proc.database:
-        print(f"[Face Recognition] {len(face_proc.database.names)} faces registered")
-
-    # Detection processor info
-    detection_proc = builder.get_processor("detection")
-    if detection_proc:
-        print("[Detection] Processor active")
-
-    print("=" * 60)
-
-
 if __name__ == "__main__":
     sys.exit(main())
