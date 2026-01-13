@@ -1,6 +1,3 @@
-
-docker exec -i face-stream bash -c "cd /home/mq/disk2T/quangnv/face && pkill -9 -f test_multi_branch_video 2>/dev/null; sleep 2; echo 'Killed all processes'"
-
 use the Docker **face-stream**, sau do cd /home/mq/disk2T/quangnv/face to debug, dev and fix. 
 python3 bin/test_multi_branch_video.py 
 
