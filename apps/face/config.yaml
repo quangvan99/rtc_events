@@ -5,7 +5,7 @@ params:
   
 sink:
   enable: true
-  type: filesink   # Các loại: filesink, fakesink, rtsp, display
+  type: fakesink   # Các loại: filesink, fakesink, rtsp, display
   properties:
     location: "${OUTPUT_DIR:data/face/output_recognition.avi}"
     sync: false

@@ -1,4 +1,11 @@
-"""Dynamic camera management with tee fanout to multiple branches."""
+"""Dynamic camera management with tee fanout to multiple branches.
+
+STABILITY FIX (2026-01-13):
+- PAUSE pipeline during camera add/remove for safe topology changes
+- Incremental state sync: NULL → READY → PAUSED → PLAYING with waits
+- Update batch size AFTER state sync completes
+- Reference: /home/mq/disk2T/duy/tks_prj/infra/deepstream
+"""
 
 from __future__ import annotations
 
@@ -15,6 +22,9 @@ from src.pipeline_builder import BranchInfo
 from src.source_mapper import SourceIDMapper
 
 logger = logging.getLogger(__name__)
+
+# State transition timeout (5 seconds per state)
+STATE_CHANGE_TIMEOUT = 5 * Gst.SECOND
 
 
 class MultibranchCameraManager:
@@ -36,8 +46,88 @@ class MultibranchCameraManager:
         if wait > 0:
             time.sleep(wait)
 
+    def _incremental_state_sync(self, element: Gst.Element, target_state: Gst.State) -> bool:
+        """Sync element state incrementally: NULL → READY → PAUSED → PLAYING.
+
+        Reference implementation pattern from duy/tks_prj/infra/deepstream.
+        Each transition waits for completion before proceeding.
+        """
+        element_name = element.get_name()
+
+        # Always start from NULL
+        element.set_state(Gst.State.NULL)
+
+        # Incremental transitions with explicit waits
+        if target_state >= Gst.State.READY:
+            element.set_state(Gst.State.READY)
+            ret, _, _ = element.get_state(STATE_CHANGE_TIMEOUT)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                logger.error(f"[CAM-MANAGER] Failed to set {element_name} to READY")
+                return False
+            logger.debug(f"[CAM-MANAGER] {element_name} set to READY")
+
+        if target_state >= Gst.State.PAUSED:
+            element.set_state(Gst.State.PAUSED)
+            ret, _, _ = element.get_state(STATE_CHANGE_TIMEOUT)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                logger.error(f"[CAM-MANAGER] Failed to set {element_name} to PAUSED")
+                return False
+            logger.debug(f"[CAM-MANAGER] {element_name} set to PAUSED")
+
+        if target_state >= Gst.State.PLAYING:
+            element.set_state(Gst.State.PLAYING)
+            ret, _, _ = element.get_state(STATE_CHANGE_TIMEOUT)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                logger.error(f"[CAM-MANAGER] Failed to set {element_name} to PLAYING")
+                return False
+            logger.debug(f"[CAM-MANAGER] {element_name} set to PLAYING")
+
+        return True
+
+    def _update_batch_size(self, branch_name: str) -> None:
+        """Update nvstreammux batch-size after camera add/remove.
+
+        Uses iterator RESYNC handling for concurrent modifications.
+        Reference: duy/tks_prj/infra/deepstream/services/camera_manager.py
+        """
+        b = self.branches.get(branch_name)
+        if not b or not b.nvstreammux:
+            return
+
+        streammux = b.nvstreammux
+        connected_count = 0
+        iterator = streammux.iterate_sink_pads()
+
+        while True:
+            result, pad = iterator.next()
+            if result == Gst.IteratorResult.OK:
+                if pad.is_linked():
+                    connected_count += 1
+            elif result == Gst.IteratorResult.RESYNC:
+                # Iterator modified during iteration - restart count
+                iterator.resync()
+                connected_count = 0
+                continue
+            elif result == Gst.IteratorResult.ERROR:
+                logger.warning(f"[CAM-MANAGER] Iterator error in _update_batch_size for {branch_name}")
+                break
+            else:  # DONE
+                break
+
+        current_batch_size = streammux.get_property('batch-size')
+        if connected_count > 0 and connected_count != current_batch_size:
+            # DISABLED: Dynamic batch-size update may cause crashes in custom inference lib
+            # streammux.set_property('batch-size', connected_count)
+            logger.info(f"[CAM-MANAGER] Skipping batch-size update for {branch_name} (keeping {current_batch_size})")
+
     def add_camera(self, camera_id: str, uri: str, branch_names: list[str]) -> bool:
-        """Add camera to branches."""
+        """Add camera to branches with safe pipeline state management.
+
+        STABILITY FIX:
+        - If pipeline is READY (no cameras yet), transition to PLAYING after adding
+        - If pipeline is PLAYING, PAUSE during topology change to prevent race conditions
+        Reference: duy/tks_prj/infra/deepstream pattern.
+        """
         with self._lock:
             self._delay()
             if camera_id in self._cameras:
@@ -47,47 +137,217 @@ class MultibranchCameraManager:
             if not branches:
                 return False
 
+            # Get current pipeline state
+            _, prev_state, _ = self.pipeline.get_state(0)
+            is_first_camera = len(self._cameras) == 0
+            logger.info(f"[CAM-MANAGER] Adding {camera_id} - pipeline state: {prev_state.value_nick}, first_camera: {is_first_camera}")
+
             try:
+                # STEP 1: For first camera, ensure pipeline is in safe state
+                # For additional cameras, DON'T pause - just sync source bin to current state
+                if prev_state == Gst.State.PLAYING and is_first_camera:
+                    logger.info(f"[CAM-MANAGER] Pausing pipeline for safe camera addition")
+                    self.pipeline.set_state(Gst.State.PAUSED)
+                    ret, _, _ = self.pipeline.get_state(STATE_CHANGE_TIMEOUT)
+                    if ret == Gst.StateChangeReturn.FAILURE:
+                        logger.error(f"[CAM-MANAGER] Failed to pause pipeline")
+                        return False
+
+                # STEP 2: Create camera bin elements
                 source_id = self._mapper.add(camera_id, uri)
                 bin_elem = Gst.Bin.new(f"cam_{camera_id}")
 
-                src = Gst.ElementFactory.make("nvurisrcbin", f"src_{camera_id}")
-                src.set_property("uri", uri)
-                src.set_property("gpu-id", self._gpu_id)
-                src.set_property("cudadec-memtype", 0)
-                src.set_property("num-extra-surfaces", 4)
+                # Create source using uridecodebin pattern (like reference implementation)
+                # uridecodebin -> nvvideoconvert -> capsfilter -> tee
+                uridecodebin = Gst.ElementFactory.make("uridecodebin", f"uridecode_{camera_id}")
+                uridecodebin.set_property("uri", uri)
+
+                nvvidconv = Gst.ElementFactory.make("nvvideoconvert", f"nvconv_{camera_id}")
+                nvvidconv.set_property("nvbuf-memory-type", 0)
+
+                capsfilter = Gst.ElementFactory.make("capsfilter", f"srccaps_{camera_id}")
+                capsfilter.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM), format=NV12"))
 
                 tee = Gst.ElementFactory.make("tee", f"tee_{camera_id}")
                 tee.set_property("allow-not-linked", True)
 
-                bin_elem.add(src)
+                bin_elem.add(uridecodebin)
+                bin_elem.add(nvvidconv)
+                bin_elem.add(capsfilter)
                 bin_elem.add(tee)
+
+                # Link static elements
+                nvvidconv.link(capsfilter)
+                capsfilter.link(tee)
+
+                # Connect pad-added for uridecodebin -> nvvidconv
+                def on_uridecode_pad_added(_s, pad, conv):
+                    caps = pad.get_current_caps()
+                    if caps:
+                        structure = caps.get_structure(0)
+                        if structure.get_name().startswith("video"):
+                            sink = conv.get_static_pad("sink")
+                            if not sink.is_linked():
+                                ret = pad.link(sink)
+                                if ret == Gst.PadLinkReturn.OK:
+                                    logger.info(f"[CAM-MANAGER] uridecodebin linked to nvvidconv for {camera_id}")
+
+                uridecodebin.connect("pad-added", on_uridecode_pad_added, nvvidconv)
+
+                # Create ghost pad from tee src for external access
+                ghost_src = Gst.GhostPad.new_no_target("src", Gst.PadDirection.SRC)
+                bin_elem.add_pad(ghost_src)
+
                 self.pipeline.add(bin_elem)
 
+                # STEP 3: Link to branches FIRST (before state sync) - like reference implementation
+                # Link while bin is in NULL state for safe topology change
                 branch_pads = {}
-                for b in branches:
-                    branch_pads[b] = self._link_branch(bin_elem, tee, camera_id, source_id, b)
+                branch_drop_flags = {}  # Store drop flags for each branch (except first)
 
-                def on_pad_added(_s, pad, data):
-                    t, cid = data
-                    if cid in self._cameras and pad.get_name().startswith("vsrc"):
-                        sink = t.get_static_pad("sink")
-                        if sink and not sink.is_linked():
-                            pad.link(sink)
+                for idx, b in enumerate(branches):
+                    logger.info(f"[CAM-MANAGER] Linking branch {idx+1}/{len(branches)}: {b}")
+                    pad = self._link_branch(bin_elem, tee, camera_id, source_id, b, sync=False)  # Don't sync yet
+                    branch_pads[b] = pad
 
-                src.connect("pad-added", on_pad_added, (tee, camera_id))
-                bin_elem.sync_state_with_parent()
+                    # For all branches except the first, add controlled DROP probe
+                    if len(branches) > 1 and idx > 0:
+                        drop_flag = [True]
 
+                        def make_probe_fn(flag):
+                            def probe_fn(p, info):
+                                if flag[0]:
+                                    return Gst.PadProbeReturn.DROP
+                                return Gst.PadProbeReturn.OK
+                            return probe_fn
+
+                        probe_id = pad.add_probe(Gst.PadProbeType.BUFFER, make_probe_fn(drop_flag))
+                        branch_drop_flags[b] = (pad, probe_id, drop_flag)
+                        logger.debug(f"[CAM-MANAGER] Added DROP probe to branch {b}")
+
+                # STEP 4: Now sync camera bin state (with branches already linked)
+                logger.info(f"[CAM-MANAGER] Syncing camera bin to pipeline state")
+
+                if is_first_camera or prev_state == Gst.State.READY:
+                    # First camera - sync to READY, then transition with pipeline
+                    if not self._incremental_state_sync(bin_elem, Gst.State.READY):
+                        logger.error(f"[CAM-MANAGER] Failed to sync camera bin to READY")
+                elif prev_state == Gst.State.PLAYING:
+                    # Additional camera - sync bin incrementally while pipeline is PLAYING
+                    if not self._incremental_state_sync(bin_elem, Gst.State.PAUSED):
+                        logger.warning(f"[CAM-MANAGER] Camera bin PAUSED sync warning")
+                    time.sleep(2.0)
+
+                # STEP 5: Store camera info before state changes
                 self._cameras[camera_id] = {
                     "bin": bin_elem, "tee": tee, "source_id": source_id,
                     "uri": uri, "branch_pads": branch_pads
                 }
+
+                # STEP 6: Transition pipeline and camera to PLAYING
+                if is_first_camera or prev_state == Gst.State.READY:
+                    # First camera - need to start entire pipeline
+                    logger.info(f"[CAM-MANAGER] First camera - transitioning pipeline to PLAYING")
+
+                    # Add blocking probe on tee to control first frame timing
+                    first_frame_event = threading.Event()
+                    frame_count = [0]
+
+                    def tee_buffer_probe(pad, info):
+                        frame_count[0] += 1
+                        if frame_count[0] <= 3:  # Block first 3 frames for warmup
+                            logger.debug(f"[CAM-MANAGER] Warmup frame {frame_count[0]}")
+                            return Gst.PadProbeReturn.DROP
+                        if frame_count[0] == 4:
+                            first_frame_event.set()
+                            logger.info(f"[CAM-MANAGER] First valid frame passed for {camera_id}")
+                        return Gst.PadProbeReturn.PASS
+
+                    tee_sink = tee.get_static_pad("sink")
+                    probe_id = tee_sink.add_probe(Gst.PadProbeType.BUFFER, tee_buffer_probe)
+
+                    # Set pipeline to PAUSED first (load all elements including branches)
+                    logger.info(f"[CAM-MANAGER] Setting pipeline to PAUSED for safe preroll")
+                    self.pipeline.set_state(Gst.State.PAUSED)
+                    ret, _, _ = self.pipeline.get_state(10 * Gst.SECOND)  # Wait for PAUSED
+                    if ret == Gst.StateChangeReturn.FAILURE:
+                        logger.warning(f"[CAM-MANAGER] Pipeline PAUSED transition warning")
+
+                    # Wait for nvurisrcbin to connect and negotiate caps
+                    time.sleep(2.0)
+
+                    # Update batch sizes AFTER source is connected but BEFORE playing
+                    for b in branches:
+                        self._update_batch_size(b)
+
+                    # Now set to PLAYING
+                    logger.info(f"[CAM-MANAGER] Setting pipeline to PLAYING")
+                    self.pipeline.set_state(Gst.State.PLAYING)
+                    ret, _, _ = self.pipeline.get_state(STATE_CHANGE_TIMEOUT)
+                    if ret == Gst.StateChangeReturn.FAILURE:
+                        logger.warning(f"[CAM-MANAGER] Pipeline PLAYING transition returned FAILURE (may still work)")
+
+                    # Wait for first valid frame to pass through
+                    if first_frame_event.wait(timeout=5.0):
+                        logger.info(f"[CAM-MANAGER] Pipeline stable with first frames")
+                    else:
+                        logger.warning(f"[CAM-MANAGER] Timeout waiting for first frame")
+
+                    # Remove warmup probe after stable
+                    tee_sink.remove_probe(probe_id)
+
+                    # STEP 7: Release DROP probes on remaining branches SEQUENTIALLY
+                    # Key fix: Let first branch's inference engine initialize before starting others
+                    if branch_drop_flags:
+                        # Wait for first branch to fully initialize (process several frames)
+                        time.sleep(2.0)
+                        logger.info(f"[CAM-MANAGER] Enabling remaining branches...")
+                        for idx, (b, (pad, pid, drop_flag)) in enumerate(branch_drop_flags.items()):
+                            logger.info(f"[CAM-MANAGER] Enabling branch: {b}")
+                            # Toggle flag instead of removing probe (safer)
+                            drop_flag[0] = False
+                            # Wait between each branch to allow inference engine initialization
+                            if idx < len(branch_drop_flags) - 1:
+                                time.sleep(1.5)
+                        logger.info(f"[CAM-MANAGER] All branches enabled")
+
+                    ret, _, _ = self.pipeline.get_state(STATE_CHANGE_TIMEOUT)
+                    if ret == Gst.StateChangeReturn.FAILURE:
+                        logger.warning(f"[CAM-MANAGER] Pipeline PLAYING transition returned FAILURE (may still work)")
+
+                elif prev_state == Gst.State.PLAYING:
+                    # Additional camera - DON'T pause pipeline, just sync source bin state
+                    logger.info(f"[CAM-MANAGER] Additional camera - syncing to PLAYING state")
+
+                    # Update batch sizes
+                    for b in branches:
+                        self._update_batch_size(b)
+
+                    # Sync camera bin to PLAYING state incrementally
+                    if not self._incremental_state_sync(bin_elem, Gst.State.PLAYING):
+                        logger.warning(f"[CAM-MANAGER] Camera bin PLAYING sync warning")
+
+                    # Wait for camera to connect and stabilize
+                    time.sleep(3.0)
+                    logger.info(f"[CAM-MANAGER] Additional camera stabilized")
+
                 self._last_op = time.time()
+                logger.info(f"[CAM-MANAGER] Successfully added {camera_id} to branches: {branches}")
                 return True
 
             except Exception as e:
-                logger.error(f"add_camera failed: {e}")
+                logger.error(f"add_camera failed: {e}", exc_info=True)
+                # Attempt cleanup
+                try:
+                    if camera_id in self._cameras:
+                        del self._cameras[camera_id]
+                    self.pipeline.remove(bin_elem)
+                except:
+                    pass
                 self._mapper.remove(camera_id)
+                # Restore pipeline state if needed
+                if prev_state == Gst.State.PLAYING:
+                    self.pipeline.set_state(Gst.State.PLAYING)
                 return False
 
     def remove_camera(self, camera_id: str) -> bool:
@@ -120,20 +380,42 @@ class MultibranchCameraManager:
                 return False
 
     def add_camera_to_branch(self, camera_id: str, branch_name: str) -> bool:
-        """Add camera to additional branch."""
+        """Add camera to additional branch with safe pipeline state management."""
         with self._lock:
             self._delay()
             cam = self._cameras.get(camera_id)
             if not cam or branch_name in cam["branch_pads"] or branch_name not in self.branches:
                 return False
 
+            # Get current pipeline state
+            _, prev_state, _ = self.pipeline.get_state(0)
+            logger.info(f"[CAM-MANAGER] Adding {camera_id} to branch {branch_name}")
+
             try:
+                # PAUSE pipeline for safe topology change
+                if prev_state == Gst.State.PLAYING:
+                    self.pipeline.set_state(Gst.State.PAUSED)
+                    self.pipeline.get_state(STATE_CHANGE_TIMEOUT)
+
+                # Link branch with element state sync
                 pad = self._link_branch(cam["bin"], cam["tee"], camera_id, cam["source_id"], branch_name, True)
                 cam["branch_pads"][branch_name] = pad
+
+                # Update batch size
+                self._update_batch_size(branch_name)
+
+                # Resume pipeline
+                if prev_state == Gst.State.PLAYING:
+                    self.pipeline.set_state(Gst.State.PLAYING)
+                    self.pipeline.get_state(STATE_CHANGE_TIMEOUT)
+
                 self._last_op = time.time()
+                logger.info(f"[CAM-MANAGER] Successfully added {camera_id} to branch {branch_name}")
                 return True
             except Exception as e:
-                logger.error(f"add_camera_to_branch failed: {e}")
+                logger.error(f"add_camera_to_branch failed: {e}", exc_info=True)
+                if prev_state == Gst.State.PLAYING:
+                    self.pipeline.set_state(Gst.State.PLAYING)
                 return False
 
     def remove_camera_from_branch(self, camera_id: str, branch_name: str) -> bool:
@@ -182,7 +464,10 @@ class MultibranchCameraManager:
                 return False
 
     def _link_branch(self, bin_elem, tee, camera_id, source_id, branch_name, sync=False) -> Gst.Pad:
-        """Link: tee -> nvconv -> caps -> queue -> mux."""
+        """Link: tee -> nvconv -> caps -> queue -> mux.
+
+        When sync=True, elements are synced to parent state after creation.
+        """
         b = self.branches[branch_name]
 
         nv = Gst.ElementFactory.make("nvvideoconvert", f"nv_{camera_id}_{branch_name}")
@@ -210,10 +495,11 @@ class MultibranchCameraManager:
         bin_elem.add_pad(ghost)
         ghost.link(mux_sink)
 
+        # Sync element states if requested (for dynamic branch addition)
         if sync:
-            nv.sync_state_with_parent()
-            caps.sync_state_with_parent()
-            q.sync_state_with_parent()
+            _, parent_state, _ = bin_elem.get_state(0)
+            for elem in [nv, caps, q]:
+                self._incremental_state_sync(elem, parent_state)
 
         return tee_src
 

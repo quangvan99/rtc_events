@@ -2,10 +2,10 @@
 """
 Multi-Branch Pipeline - Clean Architecture with Auto-Discovery
 
-This entry point demonstrates the cleanest usage pattern:
-- ProcessorRegistry auto-discovers processors from apps/
-- PipelineBuilder auto-creates processors for configured branches
-- No explicit processor imports or instantiation needed
+STABILITY FIX (2026-01-13):
+- Pipeline starts in READY state, not PLAYING
+- Only transitions to PLAYING after first camera is added
+- This prevents nvstreammux crash with empty sources
 
 Usage:
     python entry/test_multi_branch_video.py
@@ -13,7 +13,15 @@ Usage:
 """
 
 import argparse
+import logging
 import sys
+
+# Configure logging early
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
 
 import gi
 gi.require_version("Gst", "1.0")
@@ -36,7 +44,7 @@ def main():
         description="Run multi-branch DeepStream pipeline with auto-discovered processors"
     )
     parser.add_argument(
-        "--config", 
+        "--config",
         default="configs/multi-branch.yaml",
         help="Path to pipeline configuration YAML"
     )
@@ -61,22 +69,29 @@ def main():
     for sink in builder.branch_sinks.values():
         sink.start()
 
-    # Set pipeline to PLAYING state
-    print("\n[Pipeline] Setting to PLAYING...")
-    ret = pipeline.set_state(Gst.State.PLAYING)
+    # STABILITY FIX: Start in READY state, not PLAYING
+    # This prevents crashes from empty nvstreammux
+    # Pipeline will transition to PLAYING when first camera is added
+    print("\n[Pipeline] Setting to READY (will PLAY after first camera added)...")
+    ret = pipeline.set_state(Gst.State.READY)
     if ret == Gst.StateChangeReturn.FAILURE:
-        print("[ERROR] Failed to start pipeline!")
+        print("[ERROR] Failed to set pipeline to READY!")
         return 1
 
-    # Start processors after pipeline is playing
+    # Wait for READY state
+    ret, _, _ = pipeline.get_state(5 * Gst.SECOND)
+    if ret == Gst.StateChangeReturn.FAILURE:
+        print("[ERROR] Pipeline failed to reach READY state!")
+        return 1
+
+    print("[Pipeline] READY - waiting for cameras...")
+
+    # Start processors after pipeline is ready
     builder.start_processors()
 
     # Start camera API server
     api = CameraAPIServer(config.get("camera_api", {}), manager)
     api.start()
-
-    # Display processor-specific information
-    # _display_processor_info(builder)
 
     # Wait for shutdown signal
     wait_for_shutdown()
@@ -88,7 +103,7 @@ def main():
     pipeline.set_state(Gst.State.NULL)
     for sink in builder.branch_sinks.values():
         sink.stop()
-    
+
     print("[Done]")
     return 0
 
@@ -97,17 +112,17 @@ def _display_processor_info(builder: PipelineBuilder) -> None:
     """Display information from processors after startup."""
     print("\n" + "=" * 60)
     print(f"[Processors] Active: {list(builder.processors.keys())}")
-    
+
     # Face recognition processor info
     face_proc = builder.get_processor("recognition")
     if face_proc and hasattr(face_proc, 'database') and face_proc.database:
         print(f"[Face Recognition] {len(face_proc.database.names)} faces registered")
-    
+
     # Detection processor info
     detection_proc = builder.get_processor("detection")
     if detection_proc:
         print("[Detection] Processor active")
-    
+
     print("=" * 60)
 
 
