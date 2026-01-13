@@ -14,7 +14,7 @@ class SourceIDMapper:
     
     Usage:
         mapper = SourceIDMapper()
-        source_id = mapper.add("cam_01", "rtsp://...")
+        source_id = mapper.add("cam_01")
         camera_id = mapper.get_camera_id(source_id)
         mapper.remove("cam_01")
     """
@@ -26,7 +26,7 @@ class SourceIDMapper:
         self._next_id = 0
         self._freed: list[int] = []
 
-    def add(self, camera_id: str, url: str = "") -> int:
+    def add(self, camera_id: str) -> int:
         """Add camera, returns assigned source_id. Raises ValueError if exists."""
         with self._lock:
             if camera_id in self._cam_to_src:
