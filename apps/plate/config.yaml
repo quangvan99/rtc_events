@@ -5,6 +5,7 @@ params:
   point_confidence_threshold: 0.5
   ocr_confidence_threshold: 0.9
   log_interval: 1.0
+  visualize_keypoints: true
 
 sink:
   enable: true
@@ -30,6 +31,8 @@ elements:
   - type: nvinfer
     name: pgie_plate
     config_file: "data/license_plate/detect/infer.txt"
+    probes:
+      src: pgie_plate_probe
 
   - type: nvtracker
     name: tracker_plate

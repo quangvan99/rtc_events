@@ -54,18 +54,6 @@ def main():
     config = load_config(args.config)
     print(f"[Config] Loaded: {args.config}")
 
-    # Check if plate_recognition branch is enabled
-    branches = config.get("pipeline", {}).get("branches", {})
-    if "plate_recognition" in branches:
-        print("[OCR] Preloading TensorRT OCR engine (before Gst.init)...")
-        try:
-            from apps.plate import OCREngineHolder
-            OCREngineHolder.preload()
-            print("[OCR] Engine loaded successfully!")
-        except Exception as e:
-            print(f"[OCR] WARNING: Failed to load OCR engine: {e}")
-            print("[OCR] Plate recognition may not work!")
-
     builder = PipelineBuilder(config)
 
     # Build pipeline

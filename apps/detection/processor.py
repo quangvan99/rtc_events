@@ -16,7 +16,8 @@ from gi.repository import Gst
 from src.processor_registry import ProcessorRegistry
 from src.sinks.base_sink import BaseSink
 from src.common import BatchIterator, get_batch_meta, fps_probe_factory
-
+import numpy as np
+import pyds
 
 COLOR_TEXT = (1.0, 1.0, 1.0, 1.0)
 COLOR_TEXT_BG = (0.0, 0.0, 0.0, 0.7)
@@ -101,16 +102,33 @@ class DetectionProcessor:
         }
     
     def _osd_probe(self, pad, info, user_data) -> Gst.PadProbeReturn:
-        """OSD display probe for detection info"""
-        batch = get_batch_meta(info.get_buffer())
-        if not batch:
-            return Gst.PadProbeReturn.OK
-        
-        for frame, obj in BatchIterator(batch):
-            self._total_frames += 1
-            self._total_objects += 1
-            update_display(obj, 1, 0.0)
-        
+        gst_buffer = info.get_buffer()
+        if not gst_buffer:
+            print("Unable to get GstBuffer ")
+            return
+
+        batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+
+        l_frame = batch_meta.frame_meta_list
+        while l_frame is not None:
+            try:
+                frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+            except StopIteration:
+                break
+
+            surface = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+            frame_image = np.array(surface, copy=True, order='C')
+            pyds.unmap_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+            print(frame_image.shape)
+            # cv2.imwrite(f"frame_ex.jpg", frame_image)
+
+            # stream_index = f"stream_{name_branch}_{frame_meta.batch_id}"
+            # perf_data.update_fps(stream_index)
+            try:
+                l_frame = l_frame.next
+            except StopIteration:
+                break
+
         return Gst.PadProbeReturn.OK
     
     def on_pipeline_built(self, pipeline: Gst.Pipeline, branch_info: Any) -> None:

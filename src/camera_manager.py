@@ -457,7 +457,7 @@ class MultibranchCameraManager:
         b = self.branches[branch_name]
 
         nv = Gst.ElementFactory.make("nvvideoconvert", f"nv_{camera_id}_{branch_name}")
-        nv.set_property("nvbuf-memory-type", 0)
+        nv.set_property("nvbuf-memory-type", 3)
         bin_elem.add(nv)
 
         caps = Gst.ElementFactory.make("capsfilter", f"caps_{camera_id}_{branch_name}")
