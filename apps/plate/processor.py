@@ -206,47 +206,17 @@ def extract_keypoints(obj_meta, point_threshold: float = 0.5) -> Optional[np.nda
             return None
 
         # Normalize points within bbox
+        # Order: top-left(0), top-right(1), bottom-right(2), bottom-left(3)
         kps = np.array(points)
-        pnt0 = np.maximum(kps[0], [bbox[0], bbox[1]])
-        pnt1 = np.array([np.minimum(kps[1][0], bbox[2]), np.maximum(kps[1][1], bbox[1])])
-        pnt2 = np.minimum(kps[3], [bbox[2], bbox[3]])
-        pnt3 = np.array([np.maximum(kps[2][0], bbox[0]), np.minimum(kps[2][1], bbox[3])])
+        pnt0 = np.maximum(kps[0], [bbox[0], bbox[1]])  # top-left
+        pnt1 = np.array([np.minimum(kps[1][0], bbox[2]), np.maximum(kps[1][1], bbox[1])])  # top-right
+        pnt2 = np.minimum(kps[2], [bbox[2], bbox[3]])  # bottom-right
+        pnt3 = np.array([np.maximum(kps[3][0], bbox[0]), np.minimum(kps[3][1], bbox[3])])  # bottom-left
 
         return np.array([pnt0, pnt1, pnt2, pnt3], dtype=np.float32)
 
     except Exception as e:
         print(f"[Plate] Error extracting keypoints: {e}")
-        return None
-
-
-def warp_plate(frame: np.ndarray, points: np.ndarray) -> Optional[np.ndarray]:
-    """Perspective warp plate region to rectangle using 4 corner points."""
-    try:
-        points = order_points(points.astype(np.float32))
-
-        width_a = np.linalg.norm(points[0] - points[1])
-        width_b = np.linalg.norm(points[2] - points[3])
-        max_width = int(max(width_a, width_b))
-
-        height_a = np.linalg.norm(points[0] - points[3])
-        height_b = np.linalg.norm(points[1] - points[2])
-        max_height = int(max(height_a, height_b))
-
-        if max_width < 10 or max_height < 10:
-            return None
-
-        dst = np.array([
-            [0, 0],
-            [max_width - 1, 0],
-            [max_width - 1, max_height - 1],
-            [0, max_height - 1]
-        ], dtype=np.float32)
-
-        matrix = cv2.getPerspectiveTransform(points, dst)
-        warped = cv2.warpPerspective(frame, matrix, (max_width, max_height))
-
-        return warped
-    except Exception:
         return None
 
 
@@ -378,61 +348,64 @@ class PlateRecognitionProcessor:
         Flow:
         1. Poll OCR results from worker (updates cache)
         2. For new plates:
-           a. Extract full frame (lazy load)
+           a. Extract full frame (lazy load per frame)
            b. Extract keypoints -> perspective warp (or fallback to bbox crop)
            c. Submit to OCR worker
         3. Display cached OCR results
         """
-        import pyds
-
         gst_buffer = info.get_buffer()
-        if not gst_buffer:
-            return Gst.PadProbeReturn.OK
-
-        batch = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+        batch = get_batch_meta(gst_buffer)
         if not batch:
             return Gst.PadProbeReturn.OK
-
-        params = self._config.get("params", {})
-        point_threshold = params.get("point_confidence_threshold", 0.5)
 
         # 1. Poll OCR results from worker (non-blocking)
         self._poll_ocr_results()
 
+        params = self._config.get("params", {})
+        point_threshold = params.get("point_confidence_threshold", 0.5)
+
         # 2. Process each frame
-        l_frame = batch.frame_meta_list
-        while l_frame:
-            try:
-                frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
-                frame_image = None  # Lazy load
+        batch_iter = BatchIterator(batch)
+        for frame_meta in batch_iter.frames():
+            frame_image = None  # Lazy load frame only when needed
 
-                l_obj = frame_meta.obj_meta_list
-                while l_obj:
-                    try:
-                        obj = pyds.NvDsObjectMeta.cast(l_obj.data)
-                        self._total_frames += 1
-                        object_id = obj.object_id
+            for obj in batch_iter.objects(frame_meta):
+                self._total_frames += 1
+                object_id = obj.object_id
 
-                        # Process new objects only
-                        if object_id not in self._processed_ids:
-                            self._total_plates += 1
-                            self._processed_ids.add(object_id)
+                # Process new objects only
+                if object_id not in self._processed_ids:
+                    self._total_plates += 1
+                    self._processed_ids.add(object_id)
+                    print(f"[Plate] Detected id={object_id}, conf={obj.confidence:.2f}")
 
-                            # Mark as pending for now - frame extraction disabled
-                            self._ocr_cache[object_id] = "DETECTED"
-                            print(f"[Plate] id={object_id}, conf={obj.confidence:.2f}", flush=True)
+                    # Lazy load frame image
+                    if frame_image is None:
+                        frame_image = extract_frame(gst_buffer, frame_meta)
 
-                        # 3. Update display (from cache)
-                        cached = self._ocr_cache.get(object_id, "??????")
-                        update_display(obj, cached)
+                    if frame_image is not None:
+                        # Try keypoint-based perspective warp first
+                        keypoints = extract_keypoints(obj, point_threshold)
+                        plate_img = None
 
-                        l_obj = l_obj.next
-                    except StopIteration:
-                        break
+                        if keypoints is not None:
+                            plate_img = warp_plate(frame_image, keypoints)
 
-                l_frame = l_frame.next
-            except StopIteration:
-                break
+                        # Fallback to bbox crop if warp failed
+                        if plate_img is None:
+                            plate_img = crop_plate_bbox(frame_image, obj)
+
+                        if plate_img is not None:
+                            self._submit_to_worker(object_id, plate_img)
+                            self._ocr_cache[object_id] = "PROCESSING..."
+                        else:
+                            self._ocr_cache[object_id] = "CROP_FAILED"
+                    else:
+                        self._ocr_cache[object_id] = "FRAME_ERR"
+
+                # 3. Update display (from cache)
+                cached = self._ocr_cache.get(object_id, "??????")
+                update_display(obj, cached)
 
         return Gst.PadProbeReturn.OK
 

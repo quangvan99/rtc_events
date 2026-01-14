@@ -90,7 +90,7 @@ def check_plate_square(plate_img: np.ndarray):
     height, width = plate_img.shape[:2]
     if width == 0:
         return None, None
-    if width / height < 2:
+    if width / height > 1:
         mid = height // 2
         top = plate_img[:mid, :]
         bottom = plate_img[mid:, :]
@@ -235,8 +235,6 @@ def process_plate(plate_img, ctx, exec_context, inputs, outputs, stream,
 
     _, img_list = check_plate_square(plate_img)
     images = img_list if img_list else [plate_img]
-    # cv2.imwrite("./debug_plate_input.jpg", plate_img)
-
     results = []
     for img in images:
         # Preprocess
