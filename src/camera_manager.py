@@ -464,19 +464,11 @@ class MultibranchCameraManager:
                 return False
 
     def _link_branch(self, bin_elem, tee, camera_id, source_id, branch_name, sync=False) -> Gst.Pad:
-        """Link: tee -> nvconv -> caps -> queue -> mux.
+        """Link: tee -> queue -> mux.
 
         When sync=True, elements are synced to parent state after creation.
         """
         b = self.branches[branch_name]
-
-        nv = Gst.ElementFactory.make("nvvideoconvert", f"nv_{camera_id}_{branch_name}")
-        nv.set_property("nvbuf-memory-type", 0)
-        bin_elem.add(nv)
-
-        caps = Gst.ElementFactory.make("capsfilter", f"caps_{camera_id}_{branch_name}")
-        caps.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"))
-        bin_elem.add(caps)
 
         q = Gst.ElementFactory.make("queue", f"q_{camera_id}_{branch_name}")
         q.set_property("max-size-buffers", 30)
@@ -486,9 +478,7 @@ class MultibranchCameraManager:
         bin_elem.add(q)
 
         tee_src = tee.request_pad_simple("src_%u")
-        tee_src.link(nv.get_static_pad("sink"))
-        nv.link(caps)
-        caps.link(q)
+        tee_src.link(q.get_static_pad("sink"))
 
         mux_sink = b.nvstreammux.request_pad_simple(f"sink_{source_id}")
         ghost = Gst.GhostPad.new(f"g_{branch_name}_{camera_id}", q.get_static_pad("src"))
@@ -498,8 +488,7 @@ class MultibranchCameraManager:
         # Sync element states if requested (for dynamic branch addition)
         if sync:
             _, parent_state, _ = bin_elem.get_state(0)
-            for elem in [nv, caps, q]:
-                self._incremental_state_sync(elem, parent_state)
+            self._incremental_state_sync(q, parent_state)
 
         return tee_src
 
@@ -516,10 +505,9 @@ class MultibranchCameraManager:
 
         # Get elements to remove
         elements = []
-        for prefix in ["nv", "caps", "q"]:
-            elem = cam["bin"].get_by_name(f"{prefix}_{camera_id}_{branch_name}")
-            if elem:
-                elements.append(elem)
+        elem = cam["bin"].get_by_name(f"q_{camera_id}_{branch_name}")
+        if elem:
+            elements.append(elem)
 
         # Step 1: Unlink from nvstreammux first (while data is blocked)
         ghost_pad = None
@@ -539,15 +527,15 @@ class MultibranchCameraManager:
             elif ret != Gst.IteratorResult.OK:
                 break
 
-        # Step 2: Unlink tee from nvvideoconvert
+        # Step 2: Unlink tee from queue
         if tee_pad and elements:
-            nv_elem = cam["bin"].get_by_name(f"nv_{camera_id}_{branch_name}")
-            if nv_elem:
-                nv_sink = nv_elem.get_static_pad("sink")
-                if nv_sink and nv_sink.is_linked():
-                    peer = nv_sink.get_peer()
+            q_elem = cam["bin"].get_by_name(f"q_{camera_id}_{branch_name}")
+            if q_elem:
+                q_sink = q_elem.get_static_pad("sink")
+                if q_sink and q_sink.is_linked():
+                    peer = q_sink.get_peer()
                     if peer:
-                        peer.unlink(nv_sink)
+                        peer.unlink(q_sink)
 
         # Step 3: Remove probe (allow any pending data to flush)
         if tee_pad and probe_id is not None:
@@ -596,17 +584,15 @@ class MultibranchCameraManager:
 
         tee_pad = cam["branch_pads"].get(branch_name)
 
-        for prefix in ["q", "caps", "nv"]:
-            elem = cam["bin"].get_by_name(f"{prefix}_{camera_id}_{branch_name}")
-            if elem:
-                elem.set_state(Gst.State.NULL)
+        elem = cam["bin"].get_by_name(f"q_{camera_id}_{branch_name}")
+        if elem:
+            elem.set_state(Gst.State.NULL)
 
         time.sleep(0.15)
 
-        for prefix in ["q", "caps", "nv"]:
-            elem = cam["bin"].get_by_name(f"{prefix}_{camera_id}_{branch_name}")
-            if elem:
-                cam["bin"].remove(elem)
+        elem = cam["bin"].get_by_name(f"q_{camera_id}_{branch_name}")
+        if elem:
+            cam["bin"].remove(elem)
 
         it = cam["bin"].iterate_pads()
         while True:

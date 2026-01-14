@@ -5,5 +5,5 @@ camera_api:
 pipeline:
   name: multi-branch-tee-pipeline
   branches:
-    recognition: apps/face/config.yaml
+    # recognition: apps/face/config.yaml
     detection: apps/detection/config.yaml

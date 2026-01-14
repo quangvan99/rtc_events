@@ -15,8 +15,9 @@ from gi.repository import Gst
 
 from src.processor_registry import ProcessorRegistry
 from src.sinks.base_sink import BaseSink
-from src.common import BatchIterator, get_batch_meta, fps_probe_factory
-
+from src.common import get_batch_meta, fps_probe_factory
+import pyds
+import numpy as np
 
 COLOR_TEXT = (1.0, 1.0, 1.0, 1.0)
 COLOR_TEXT_BG = (0.0, 0.0, 0.0, 0.7)
@@ -101,16 +102,48 @@ class DetectionProcessor:
         }
     
     def _osd_probe(self, pad, info, user_data) -> Gst.PadProbeReturn:
-        """OSD display probe for detection info"""
-        batch = get_batch_meta(info.get_buffer())
+        """Probe to extract frames as numpy arrays (before tiler)"""
+        gst_buffer = info.get_buffer()
+        if not gst_buffer:
+            return Gst.PadProbeReturn.OK
+
+        batch = get_batch_meta(gst_buffer)
         if not batch:
             return Gst.PadProbeReturn.OK
-        
-        for frame, obj in BatchIterator(batch):
+
+        # Iterate through frames in batch (not objects)
+        l_frame = batch.frame_meta_list
+        while l_frame is not None:
+            try:
+                frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+            except StopIteration:
+                break
+
+            # Get frame surface and convert to numpy
+            surface = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+            frame_image = np.array(surface, copy=True, order='C')
+            print(f"[DetectionProcessor] Frame batch_id={frame_meta.batch_id}, shape={frame_image.shape}")
+
             self._total_frames += 1
-            self._total_objects += 1
-            update_display(obj, 1, 0.0)
-        
+
+            # Count objects in this frame
+            l_obj = frame_meta.obj_meta_list
+            obj_count = 0
+            while l_obj is not None:
+                try:
+                    obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
+                    obj_count += 1
+                    self._total_objects += 1
+                    update_display(obj_meta, obj_count, 0.0)
+                    l_obj = l_obj.next
+                except StopIteration:
+                    break
+
+            try:
+                l_frame = l_frame.next
+            except StopIteration:
+                break
+
         return Gst.PadProbeReturn.OK
     
     def on_pipeline_built(self, pipeline: Gst.Pipeline, branch_info: Any) -> None:

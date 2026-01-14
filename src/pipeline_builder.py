@@ -117,10 +117,13 @@ class PipelineBuilder:
 
         # Create muxer
         mux = Gst.ElementFactory.make("nvstreammux", f"mux_{name}")
-        for k, v in cfg.get("muxer", {}).items():
+        muxer_cfg = cfg.get("muxer", {})
+        for k, v in muxer_cfg.items():
             mux.set_property(k.replace("-", "_"), v)
-        mux.set_property("live_source", cfg.get("muxer", {}).get("live-source", 1))
-        mux.set_property("nvbuf_memory_type", 0)
+        mux.set_property("live_source", muxer_cfg.get("live-source", 1))
+        # Use memory type from config (4=CUDA_UNIFIED for numpy access, 0=default)
+        mem_type = muxer_cfg.get("nvbuf-memory-type", 0)
+        mux.set_property("nvbuf_memory_type", mem_type)
         self.pipeline.add(mux)
 
         # Create element chain
