@@ -22,10 +22,10 @@ import numpy as np
 # =============================================================================
 
 INPUT_HEIGHT = 48
-INPUT_WIDTH = 640
+INPUT_WIDTH = 640  # Match engine build dimensions
 INPUT_CHANNELS = 3
-BATCH_SIZE = 2
-OUTPUT_SHAPE = (2, 80, 42)
+BATCH_SIZE = 2  # Engine was built with batch=2
+OUTPUT_SHAPE = (2, 80, 42)  # Match engine output
 
 
 # =============================================================================
@@ -86,16 +86,32 @@ class CTCLabelDecode:
 # =============================================================================
 
 def check_plate_square(plate_img: np.ndarray):
-    """Detect 2-line plates based on aspect ratio."""
+    """Detect 2-line plates based on aspect ratio.
+
+    If plate is 2-line (scale < 2): Split the plate in half then process separately.
+    If plate is 1-line (scale >= 2): return (None, None).
+    Returns: (horizontal_plate, img_list) or (None, None)
+    """
     height, width = plate_img.shape[:2]
-    if width == 0:
+    if height == 0 or width == 0:
         return None, None
-    if width / height > 1:
-        mid = height // 2
-        top = plate_img[:mid, :]
-        bottom = plate_img[mid:, :]
+
+    scale = width / height
+
+    if scale < 2:  # This is a 2-line plate
+        # Split into top and bottom halves
+        mid_height = height // 2
+        top = plate_img[:mid_height, :]
+        bottom = plate_img[mid_height:, :]
+
+        # Resize bottom to match top dimensions
         bottom = cv2.resize(bottom, (top.shape[1], top.shape[0]))
-        return cv2.hconcat([top, bottom]), [top, bottom]
+
+        # Create horizontal concatenation for visualization
+        horizontal = cv2.hconcat([top, bottom])
+
+        return horizontal, [top, bottom]
+
     return None, None
 
 
@@ -236,8 +252,9 @@ def process_plate(plate_img, ctx, exec_context, inputs, outputs, stream,
     _, img_list = check_plate_square(plate_img)
     images = img_list if img_list else [plate_img]
     results = []
+
     for img in images:
-        # Preprocess
+        # Preprocess - match reference normalize_image()
         h, w = img.shape[:2]
         ratio = w / float(h)
         resized_w = INPUT_WIDTH if math.ceil(INPUT_HEIGHT * ratio) > INPUT_WIDTH else int(math.ceil(INPUT_HEIGHT * ratio))
@@ -246,8 +263,11 @@ def process_plate(plate_img, ctx, exec_context, inputs, outputs, stream,
         resized = resized.astype(np.float32).transpose((2, 0, 1)) / 255.0
         resized = (resized - 0.5) / 0.5
 
+        # Create single padded image
         single = np.zeros((INPUT_CHANNELS, INPUT_HEIGHT, INPUT_WIDTH), dtype=np.float32)
         single[:, :, :resized_w] = resized
+
+        # Create batch of 2 (engine requires batch=2)
         batch = np.stack([single, single], axis=0)
 
         # Inference
@@ -265,6 +285,7 @@ def process_plate(plate_img, ctx, exec_context, inputs, outputs, stream,
                 cuda.memcpy_dtoh_async(out["host"], out["device"], stream)
 
             stream.synchronize()
+            # Take only first result from batch
             result = outputs[0]["host"].copy().reshape(OUTPUT_SHAPE)[0:1]
         finally:
             ctx.pop()
