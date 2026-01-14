@@ -62,3 +62,13 @@ hãy phân tích lại codebase sau đó đề xuất cấu trúc thư mục m�
 
 Tu docs/codefolder.md, cho toi 1 comprehensive plan gồm nhiều phase
 ghi vào folder @plans/folder_refactor
+
+
+tai @apps/plate tao mot file ocr.py chua logic va infer ocr engine
+  sau do import vao class PlateRecognitionProcessor:
+        - tao mot multi processing (su dung from multiprocessing import Process,
+  Queue) cho ocr engine voi dau vao la anh sau khi duoc alignment, keypoint
+        - tham khao @/home/mq/disk2T/duy/tks_prj/models/ocr_plate/,
+  @/home/mq/disk2T/duy/tks_prj/infra/deepstream/probes/plate_probes.py, @/home/mq/disk2T/duy/tks_prj/tests/plate.py
+        - test video @data/videos/plate2.mp4
+        - dam bao detection keypoint va ocr hoat dong tot qua bai toan license plate

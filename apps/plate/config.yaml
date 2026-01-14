@@ -18,7 +18,8 @@ muxer:
   batch-size: 8
   width: 1920
   height: 1080
-  nvbuf-memory-type: 0
+  # Memory type 3 = NVBUF_MEM_CUDA_UNIFIED (accessible from both CPU and GPU)
+  nvbuf-memory-type: 3
   batched-push-timeout: 40000
   live-source: 1
 
@@ -30,6 +31,12 @@ elements:
   - type: nvinfer
     name: pgie_plate
     config_file: "data/license_plate/detect/infer.txt"
+
+  # nvvideoconvert before tracker ensures buffer is CPU-accessible
+  - type: nvvideoconvert
+    name: pretracker_convert
+    properties:
+      nvbuf-memory-type: 3  # NVBUF_MEM_CUDA_UNIFIED for CPU access in probe
 
   - type: nvtracker
     name: tracker_plate

@@ -150,7 +150,7 @@ class MultibranchCameraManager:
                 # Set nvurisrcbin properties
                 nvurisrcbin.set_property("uri", uri)
                 nvurisrcbin.set_property("gpu-id", self._gpu_id)
-                nvurisrcbin.set_property("cudadec-memtype", 0)  # NVBUF_MEM_DEFAULT (zero-copy)
+                nvurisrcbin.set_property("cudadec-memtype", 0)  # Use default, CUDA_UNIFIED set on mux and nvvideoconvert
 
                 # RTSP reconnection settings
                 nvurisrcbin.set_property("rtsp-reconnect-interval", 10)
@@ -457,7 +457,7 @@ class MultibranchCameraManager:
         b = self.branches[branch_name]
 
         nv = Gst.ElementFactory.make("nvvideoconvert", f"nv_{camera_id}_{branch_name}")
-        nv.set_property("nvbuf-memory-type", 0)
+        nv.set_property("nvbuf-memory-type", 3)  # NVBUF_MEM_CUDA_UNIFIED for dGPU CPU access
         bin_elem.add(nv)
 
         caps = Gst.ElementFactory.make("capsfilter", f"caps_{camera_id}_{branch_name}")

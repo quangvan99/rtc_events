@@ -2,16 +2,19 @@
 
 from .processor import (
     PlateRecognitionProcessor,
-    OCREngineHolder,
+    warp_plate,
+)
+
+from .ocr import (
+    OCRWorkerProcess,
     check_plate_square,
     check_format_plate,
     check_format_plate_append,
-    warp_plate,
 )
 
 __all__ = [
     "PlateRecognitionProcessor",
-    "OCREngineHolder",
+    "OCRWorkerProcess",
     "check_plate_square",
     "check_format_plate",
     "check_format_plate_append",
