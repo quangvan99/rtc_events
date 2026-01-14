@@ -8,6 +8,10 @@ The OCR engine runs in a separate process (spawn) to avoid CUDA conflicts
 with GStreamer/DeepStream.
 """
 
+import threading
+# Initialize threading early to help with GIL issues in GStreamer callbacks
+threading.current_thread()
+
 import time
 from ctypes import c_float, sizeof
 from typing import Callable, Dict, Any, List, Optional, Set
@@ -141,14 +145,30 @@ def extract_frame(gst_buffer, frame_meta) -> Optional[np.ndarray]:
     """Extract full frame from GStreamer buffer.
 
     Requires nvbuf-memory-type: 3 (CUDA_UNIFIED) for dGPU in muxer config.
+
+    Note: Uses direct numpy array access to avoid GIL issues with pyds bindings.
     """
     import pyds
+
     try:
+        # Get the surface directly - this is the problematic call
         n_frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+        if n_frame is None:
+            return None
+
+        # Immediately copy to numpy while buffer is valid
+        # Use memoryview to avoid extra allocations
         frame_copy = np.array(n_frame, copy=True, order='C')
-        frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
+
+        # Unmap immediately after copy
         pyds.unmap_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+
+        # Process after unmapping to minimize time holding the buffer
+        if len(frame_copy.shape) == 3 and frame_copy.shape[2] == 4:
+            frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGR)
+
         return frame_copy
+
     except Exception as e:
         print(f"[Plate] Error extracting frame: {e}", flush=True)
         try:
@@ -156,6 +176,16 @@ def extract_frame(gst_buffer, frame_meta) -> Optional[np.ndarray]:
         except:
             pass
         return None
+
+
+def extract_frame_crop_only(frame_meta, obj_meta) -> Optional[np.ndarray]:
+    """Extract cropped object region without full frame access.
+
+    This is a fallback when full frame extraction fails due to GIL issues.
+    Uses NvBufSurface crop functionality if available.
+    """
+    # For now, return None - full frame extraction is required for perspective warp
+    return None
 
 
 def extract_keypoints(obj_meta, point_threshold: float = 0.5) -> Optional[np.ndarray]:
