@@ -7,4 +7,4 @@ pipeline:
   branches:
     recognition: apps/face/config.yaml
     detection: apps/detection/config.yaml
-    # plate_recognition: apps/plate/config.yaml
+    plate_recognition: apps/plate/config.yaml

@@ -331,6 +331,16 @@ class MultibranchCameraManager:
                     time.sleep(3.0)
                     logger.info(f"[CAM-MANAGER] Additional camera stabilized")
 
+                    # Release DROP probes on non-first branches for additional cameras
+                    if branch_drop_flags:
+                        logger.info(f"[CAM-MANAGER] Enabling remaining branches for additional camera...")
+                        for idx, (b, (pad, pid, drop_flag)) in enumerate(branch_drop_flags.items()):
+                            logger.info(f"[CAM-MANAGER] Enabling branch: {b}")
+                            drop_flag[0] = False
+                            if idx < len(branch_drop_flags) - 1:
+                                time.sleep(0.5)
+                        logger.info(f"[CAM-MANAGER] All branches enabled for additional camera")
+
                 self._last_op = time.time()
                 logger.info(f"[CAM-MANAGER] Successfully added {camera_id} to branches: {branches}")
                 return True
