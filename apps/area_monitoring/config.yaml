@@ -1,0 +1,59 @@
+# Area Monitoring Branch Configuration
+# Pipeline: PGIE (weapon detector) -> nvtracker -> nvdsanalytics -> OSD -> sink
+
+params:
+  min_object_size: 50
+  max_age: 30
+  cleanup_interval: 10
+  test_video: "data/videos/plate2.mp4"
+  log_interval: 1.0
+  stats_interval: 10.0
+  cameras:
+    cam_test:
+      config_width: 1920
+      config_height: 1080
+      roi_filtering:
+        - roi_id: roi1
+          polygon: [[100, 100], [1000, 100], [1000, 1000], [100, 1000]]
+          class_id: [0]
+          inverse: false
+
+sink:
+  enable: true
+  type: filesink
+  properties:
+    location: "${OUTPUT_DIR:data/roi/output.avi}"
+    sync: false
+    qos: false
+
+muxer:
+  batch-size: 8
+  width: 1920
+  height: 1080
+  nvbuf-memory-type: 0
+  batched-push-timeout: 40000
+  live-source: 1
+
+elements:
+  - type: queue
+  - type: nvvideoconvert
+    name: pre_tiler_conv
+    properties: { nvbuf-memory-type: 3 }
+  - type: capsfilter
+    name: rgba_caps
+    caps: "video/x-raw(memory:NVMM), format=RGBA"
+  - type: nvinfer
+    name: pgie
+    config_file: "data/roi/config_pgie_weapon.txt"
+  - type: nvtracker
+    name: tracker
+    config_file: "data/face/models/NvDCF/config_tracker.txt"
+  - type: nvdsanalytics
+    name: analytics
+    config_file: "data/roi/config_analytics.txt"
+    probes: {src: analytics_probe}
+  - type: nvmultistreamtiler
+    properties: { rows: 2, columns: 2, width: 1920, height: 1080 }
+  - type: nvdsosd
+    properties: { process-mode: 0, display-text: 1 }
+    probes: {src: area_fps_probe}

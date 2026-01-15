@@ -165,6 +165,8 @@ class PipelineBuilder:
                 elem.set_property("config-file-path", path)
             elif elem_type == "nvtracker":
                 self._configure_tracker(elem, path)
+            elif elem_type == "nvdsanalytics":
+                elem.set_property("config-file", path)
 
         self.pipeline.add(elem)
         return elem
