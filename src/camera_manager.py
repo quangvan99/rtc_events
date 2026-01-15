@@ -84,42 +84,6 @@ class MultibranchCameraManager:
 
         return True
 
-    def _update_batch_size(self, branch_name: str) -> None:
-        """Update nvstreammux batch-size after camera add/remove.
-
-        Uses iterator RESYNC handling for concurrent modifications.
-        Reference: duy/tks_prj/infra/deepstream/services/camera_manager.py
-        """
-        b = self.branches.get(branch_name)
-        if not b or not b.nvstreammux:
-            return
-
-        streammux = b.nvstreammux
-        connected_count = 0
-        iterator = streammux.iterate_sink_pads()
-
-        while True:
-            result, pad = iterator.next()
-            if result == Gst.IteratorResult.OK:
-                if pad.is_linked():
-                    connected_count += 1
-            elif result == Gst.IteratorResult.RESYNC:
-                # Iterator modified during iteration - restart count
-                iterator.resync()
-                connected_count = 0
-                continue
-            elif result == Gst.IteratorResult.ERROR:
-                logger.warning(f"[CAM-MANAGER] Iterator error in _update_batch_size for {branch_name}")
-                break
-            else:  # DONE
-                break
-
-        current_batch_size = streammux.get_property('batch-size')
-        if connected_count > 0 and connected_count != current_batch_size:
-            # DISABLED: Dynamic batch-size update may cause crashes in custom inference lib
-            # streammux.set_property('batch-size', connected_count)
-            logger.info(f"[CAM-MANAGER] Skipping batch-size update for {branch_name} (keeping {current_batch_size})")
-
     def add_camera(self, camera_id: str, uri: str, branch_names: list[str]) -> bool:
         """Add camera to branches with safe pipeline state management.
 
@@ -352,10 +316,6 @@ class MultibranchCameraManager:
                     # Wait for nvurisrcbin to connect and negotiate caps
                     time.sleep(2.0)
 
-                    # Update batch sizes AFTER source is connected but BEFORE playing
-                    for b in branches:
-                        self._update_batch_size(b)
-
                     # Now set to PLAYING
                     logger.info(f"[CAM-MANAGER] Setting pipeline to PLAYING")
                     self.pipeline.set_state(Gst.State.PLAYING)
@@ -394,10 +354,6 @@ class MultibranchCameraManager:
                 elif prev_state == Gst.State.PLAYING:
                     # Additional camera - pipeline was PAUSED in STEP 1
                     logger.info(f"[CAM-MANAGER] Additional camera - resuming pipeline")
-
-                    # Update batch sizes
-                    for b in branches:
-                        self._update_batch_size(b)
 
                     # For file sources, pad linking already happened during PAUSED state sync
                     # Just resume pipeline - the camera bin will follow automatically as a child
@@ -512,9 +468,6 @@ class MultibranchCameraManager:
                 # Link branch with element state sync
                 pad = self._link_branch(cam["bin"], cam["tee"], camera_id, cam["source_id"], branch_name, True)
                 cam["branch_pads"][branch_name] = pad
-
-                # Update batch size
-                self._update_batch_size(branch_name)
 
                 # Resume pipeline
                 if prev_state == Gst.State.PLAYING:
