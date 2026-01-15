@@ -11,23 +11,23 @@ muxer:
   batch-size: 8
   width: 1920
   height: 1080
-  nvbuf-memory-type: 3  # NVBUF_MEM_CUDA_UNIFIED - required for numpy frame access
+  nvbuf-memory-type: 0  # NVBUF_MEM_CUDA_UNIFIED - required for numpy frame access
   batched-push-timeout: 40000
   live-source: 1
 
 elements:
   - type: queue
-  - type: nvinfer
-    name: pgie
-    config_file: "data/face/models/scrfd640/infer.txt"
   - type: nvvideoconvert
     name: pre_tiler_conv
     properties: { nvbuf-memory-type: 3 }  # CUDA_UNIFIED for frame access
   - type: capsfilter
     name: rgba_caps
     caps: "video/x-raw(memory:NVMM), format=RGBA"
-    probes: {src: osd_probe}  # Probe here BEFORE tiler to get batch frames
+  - type: nvinfer
+    name: pgie
+    config_file: "data/face/models/scrfd640/infer.txt"
   - type: nvmultistreamtiler
     properties: { rows: 2, columns: 2, width: 1920, height: 1080, nvbuf-memory-type: 3 }
   - type: nvdsosd
     properties: { process-mode: 0, display-text: 1 }
+    probes: {src: detection_fps_probe}
