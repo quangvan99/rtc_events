@@ -1,6 +1,6 @@
 sink:
   enable: true
-  type: fakesink   # Các loại: filesink, fakesink, rtsp, display
+  type: filesink   # Các loại: filesink, fakesink, rtsp, display
   properties:
     location: "${OUTPUT_DIR:data/face/output_detection.avi}"
     sync: false
@@ -13,7 +13,7 @@ muxer:
   height: 1080
   nvbuf-memory-type: 0  # NVBUF_MEM_CUDA_UNIFIED - required for numpy frame access
   batched-push-timeout: 40000
-  live-source: 0
+  live-source: 1
 
 elements:
   - type: queue

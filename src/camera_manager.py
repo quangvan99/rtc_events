@@ -274,8 +274,10 @@ class MultibranchCameraManager:
                     pad = self._link_branch(bin_elem, tee, camera_id, source_id, b, sync=False)  # Don't sync yet
                     branch_pads[b] = pad
 
-                    # For all branches except the first, add controlled DROP probe
-                    if len(branches) > 1 and idx > 0:
+                    # For FIRST camera only: add controlled DROP probe on non-first branches
+                    # This prevents race conditions during initial pipeline startup
+                    # For additional cameras, pipeline is already stable - no DROP needed
+                    if is_first_camera and len(branches) > 1 and idx > 0:
                         drop_flag = [True]
 
                         def make_probe_fn(flag):
