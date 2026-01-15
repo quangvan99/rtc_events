@@ -73,10 +73,7 @@ def update_display(
             text_params.y_offset = max(0, int(rect.top) - 25)
 
             # Format: "PLATE_TEXT (XX%)"
-            if confidence > 0:
-                text_params.display_text = f"{plate_text} ({confidence:.0%})"
-            else:
-                text_params.display_text = plate_text
+            text_params.display_text = f"{plate_text} ({confidence:.02%})"
 
             # Font settings
             text_params.font_params.font_name = "Serif"
