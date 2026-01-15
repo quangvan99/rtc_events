@@ -27,84 +27,109 @@ from src.common import BatchIterator, get_batch_meta, fps_probe_factory
 from apps.plate.plate_ocr_mp import PlateOCRWorker
 import pyds
 
-# =============================================================================
-# Constants
-# =============================================================================
-
-# OSD Colors (RGBA normalized 0.0-1.0)
-COLOR_VALID = (0.0, 1.0, 0.0, 1.0)      # Green
-COLOR_INVALID = (1.0, 0.5, 0.0, 1.0)    # Orange
-
-# Keypoint visualization colors (RGBA normalized for DeepStream OSD)
-KEYPOINT_COLORS_RGBA = [
-    (0.0, 1.0, 0.0, 1.0),    # Green - top-left
-    (1.0, 1.0, 0.0, 1.0),    # Yellow - top-right
-    (1.0, 0.0, 0.0, 1.0),    # Red - bottom-right
-    (1.0, 0.0, 1.0, 1.0),    # Magenta - bottom-left
-]
-KEYPOINT_RADIUS = 8
-
-# Display settings
-BORDER_WIDTH = 3
-
-# Streammux dimensions (should match pipeline config)
-STREAMMUX_WIDTH = 1920
-STREAMMUX_HEIGHT = 1080
-
 
 # =============================================================================
 # Display Functions
 # =============================================================================
 
-def update_display(obj_meta, is_valid: bool = True) -> None:
-    """Update OSD display for detected plate."""
-    rect = obj_meta.rect_params
-
-    # Border color by validity
-    r, g, b, a = COLOR_VALID if is_valid else COLOR_INVALID
-    rect.border_color.red, rect.border_color.green = r, g
-    rect.border_color.blue, rect.border_color.alpha = b, a
-    rect.border_width = BORDER_WIDTH
-
-
-def draw_keypoints_osd(display_meta, keypoints: np.ndarray) -> int:
-    """Draw keypoints as circles using DeepStream OSD.
+def update_display(
+    obj_meta,
+    display_meta,
+    keypoints: Optional[np.ndarray],
+    params: Dict[str, Any],
+    plate_text: str = "",
+    confidence: float = 0.0,
+    is_valid: bool = True
+) -> None:
+    """Update OSD display for detected plate with border, keypoints, and text.
 
     Args:
-        display_meta: NvDsDisplayMeta object
-        keypoints: Array of 4 corner points [[x,y], ...]
-
-    Returns:
-        Number of circles added
+        obj_meta: Object metadata for bounding box
+        display_meta: NvDsDisplayMeta for drawing keypoints and text
+        keypoints: Array of 4 corner points [[x,y], ...] or None
+        params: Config params (colors, radius, etc.)
+        plate_text: Recognized plate text to display
+        confidence: OCR confidence score
+        is_valid: Whether plate is valid (affects border color)
     """
-    num_circles = display_meta.num_circles
-    max_circles = 16  # DeepStream limit per display_meta
+    # Update border color
+    rect = obj_meta.rect_params
+    color = params.get("color_valid", [0.0, 1.0, 0.0, 1.0]) if is_valid else params.get("color_invalid", [1.0, 0.5, 0.0, 1.0])
+    r, g, b, a = color
+    rect.border_color.red, rect.border_color.green = r, g
+    rect.border_color.blue, rect.border_color.alpha = b, a
+    rect.border_width = params.get("border_width", 3)
 
-    for i, point in enumerate(keypoints):
-        if num_circles >= max_circles:
-            break
+    # Display plate text above bounding box
+    if plate_text and display_meta is not None:
+        num_labels = display_meta.num_labels
+        max_labels = 16  # DeepStream limit
 
-        x, y = int(point[0]), int(point[1])
-        color = KEYPOINT_COLORS_RGBA[i % len(KEYPOINT_COLORS_RGBA)]
+        if num_labels < max_labels:
+            text_params = display_meta.text_params[num_labels]
 
-        circle = display_meta.circle_params[num_circles]
-        circle.xc = x
-        circle.yc = y
-        circle.radius = KEYPOINT_RADIUS
-        circle.circle_color.red = color[0]
-        circle.circle_color.green = color[1]
-        circle.circle_color.blue = color[2]
-        circle.circle_color.alpha = color[3]
-        circle.has_bg_color = 1
-        circle.bg_color.red = color[0]
-        circle.bg_color.green = color[1]
-        circle.bg_color.blue = color[2]
-        circle.bg_color.alpha = color[3]
+            # Position text above bounding box
+            text_params.x_offset = int(rect.left)
+            text_params.y_offset = max(0, int(rect.top) - 25)
 
-        num_circles += 1
+            # Format: "PLATE_TEXT (XX%)"
+            if confidence > 0:
+                text_params.display_text = f"{plate_text} ({confidence:.0%})"
+            else:
+                text_params.display_text = plate_text
 
-    display_meta.num_circles = num_circles
-    return len(keypoints)
+            # Font settings
+            text_params.font_params.font_name = "Serif"
+            text_params.font_params.font_size = params.get("text_font_size", 12)
+            text_params.font_params.font_color.red = 1.0
+            text_params.font_params.font_color.green = 1.0
+            text_params.font_params.font_color.blue = 1.0
+            text_params.font_params.font_color.alpha = 1.0
+
+            # Background
+            text_params.set_bg_clr = 1
+            text_params.text_bg_clr.red = 0.0
+            text_params.text_bg_clr.green = 0.0
+            text_params.text_bg_clr.blue = 0.0
+            text_params.text_bg_clr.alpha = 0.7
+
+            display_meta.num_labels = num_labels + 1
+
+    # Draw keypoints if provided and visualization enabled
+    if keypoints is not None and params.get("visualize_keypoints", True) and display_meta is not None:
+        num_circles = display_meta.num_circles
+        max_circles = 16  # DeepStream limit per display_meta
+
+        keypoint_colors = params.get("keypoint_colors", [
+            [0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 1.0, 1.0]
+        ])
+        keypoint_radius = params.get("keypoint_radius", 8)
+
+        for i, point in enumerate(keypoints):
+            if num_circles >= max_circles:
+                break
+
+            x, y = int(point[0]), int(point[1])
+            kp_color = keypoint_colors[i % len(keypoint_colors)]
+
+            circle = display_meta.circle_params[num_circles]
+            circle.xc = x
+            circle.yc = y
+            circle.radius = keypoint_radius
+            circle.circle_color.red = kp_color[0]
+            circle.circle_color.green = kp_color[1]
+            circle.circle_color.blue = kp_color[2]
+            circle.circle_color.alpha = kp_color[3]
+            circle.has_bg_color = 1
+            circle.bg_color.red = kp_color[0]
+            circle.bg_color.green = kp_color[1]
+            circle.bg_color.blue = kp_color[2]
+            circle.bg_color.alpha = kp_color[3]
+
+            num_circles += 1
+
+        display_meta.num_circles = num_circles
 
 
 # =============================================================================
@@ -190,7 +215,7 @@ def extract_frame(gst_buffer, frame_meta) -> Optional[np.ndarray]:
         return None
 
 
-def extract_keypoints(obj_meta, point_threshold: float = 0.5) -> Optional[np.ndarray]:
+def extract_keypoints(obj_meta, muxer_width: int, muxer_height: int, point_threshold: float = 0.5) -> Optional[np.ndarray]:
     """Extract 4 corner keypoints from mask metadata."""
     try:
         num_points = int(obj_meta.mask_params.size / (sizeof(c_float) * 2))
@@ -205,11 +230,11 @@ def extract_keypoints(obj_meta, point_threshold: float = 0.5) -> Optional[np.nda
             return None
 
         gain = min(
-            obj_meta.mask_params.width / STREAMMUX_WIDTH,
-            obj_meta.mask_params.height / STREAMMUX_HEIGHT
+            obj_meta.mask_params.width / muxer_width,
+            obj_meta.mask_params.height / muxer_height
         )
-        pad_x = (obj_meta.mask_params.width - STREAMMUX_WIDTH * gain) * 0.5
-        pad_y = (obj_meta.mask_params.height - STREAMMUX_HEIGHT * gain) * 0.5
+        pad_x = (obj_meta.mask_params.width - muxer_width * gain) * 0.5
+        pad_y = (obj_meta.mask_params.height - muxer_height * gain) * 0.5
 
         bbox = [
             obj_meta.rect_params.left,
@@ -261,10 +286,6 @@ class PlateRecognitionProcessor:
             visualize_keypoints: true
     """
 
-    # Default OCR paths
-    DEFAULT_ENGINE_PATH = "/home/mq/disk2T/quangnv/face/data/license_plate/ocr/bz2_640/ppocr_dummy.engine"
-    DEFAULT_DICT_PATH = "/home/mq/disk2T/quangnv/face/data/license_plate/ocr/bz2_640/licence_plate_dict.txt"
-
     def __init__(self, source_mapper=None):
         self._config: Dict[str, Any] = {}
         self._sink: Optional[BaseSink] = None
@@ -275,12 +296,20 @@ class PlateRecognitionProcessor:
         self._total_frames = 0
         self._total_ocr_results = 0
 
+        # Muxer dimensions (from config)
+        self._muxer_width = 1920
+        self._muxer_height = 1080
+
         # OCR multiprocessing
         self._input_queue: Optional[mp.Queue] = None
         self._output_queue: Optional[mp.Queue] = None
         self._ocr_worker: Optional[PlateOCRWorker] = None
         self._result_thread: Optional[threading.Thread] = None
         self._stop_result_thread = threading.Event()
+
+        # OCR result cache: tracking_id -> (plate_text, confidence)
+        self._ocr_cache: Dict[int, Tuple[str, float]] = {}
+        self._ocr_cache_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -292,11 +321,16 @@ class PlateRecognitionProcessor:
         self._sink = sink
         params = config.get("params", {})
 
-        # OCR configuration
-        engine_path = params.get("ocr_engine_path", self.DEFAULT_ENGINE_PATH)
-        dict_path = params.get("ocr_dict_path", self.DEFAULT_DICT_PATH)
+        # Muxer dimensions from config
+        muxer = config.get("muxer", {})
+        self._muxer_width = muxer.get("width", 1920)
+        self._muxer_height = muxer.get("height", 1080)
+
+        # OCR configuration (all params from config.yaml)
+        engine_path = params["ocr_engine_path"]
+        dict_path = params["ocr_dict_path"]
         queue_size = params.get("ocr_queue_size", 100)
-        input_shape = tuple(params.get("ocr_input_shape", (2, 3, 48, 640)))
+        input_shape = tuple(params.get("ocr_input_shape", [2, 3, 48, 640]))
 
         # Create queues using spawn context for CUDA compatibility
         spawn_ctx = mp.get_context("spawn")
@@ -329,7 +363,7 @@ class PlateRecognitionProcessor:
         """Return probe callbacks."""
         params = self._config.get("params", {})
         return {
-            "pgie_plate_probe": self._pgie_probe,
+            "tracker_plate_probe": self.tracker_plate_probe,
             "plate_fps_probe": fps_probe_factory(
                 name="Plate",
                 log_interval=params.get("log_interval", 1.0),
@@ -342,13 +376,43 @@ class PlateRecognitionProcessor:
     # Probe Callbacks
     # -------------------------------------------------------------------------
 
-    def _pgie_probe(self, pad, info, user_data) -> Gst.PadProbeReturn:
+    def tracker_plate_probe(self, pad, info, user_data) -> Gst.PadProbeReturn:
         """Main probe: Extract keypoints, visualize with OSD, send to OCR."""
         gst_buffer = info.get_buffer()
         batch = get_batch_meta(gst_buffer)
+        params = self._config.get("params", {})
+        point_threshold = params.get("point_confidence_threshold", 0.5)
+        ocr_threshold = params.get("ocr_confidence_threshold", 0.9)
+
         images = {}
         for frame, obj in BatchIterator(batch):
-            keypoints = extract_keypoints(obj, point_threshold=self._config.get("params", {}).get("point_confidence_threshold", 0.5))
+            tracking_id = obj.object_id  # Get tracker ID
+
+            keypoints = extract_keypoints(
+                obj,
+                muxer_width=self._muxer_width,
+                muxer_height=self._muxer_height,
+                point_threshold=point_threshold
+            )
+
+            # Check if we have cached OCR result for this tracking ID
+            plate_text = ""
+            confidence = 0.0
+            with self._ocr_cache_lock:
+                if tracking_id in self._ocr_cache:
+                    plate_text, confidence = self._ocr_cache[tracking_id]
+
+            # Only update display if we have plate text with sufficient confidence
+            if plate_text and confidence >= ocr_threshold:
+                display_meta = pyds.nvds_acquire_display_meta_from_pool(batch)
+                update_display(
+                    obj, display_meta, keypoints, params,
+                    plate_text=plate_text,
+                    confidence=confidence,
+                    is_valid=True
+                )
+                pyds.nvds_add_display_meta_to_frame(frame, display_meta)
+
             if keypoints is not None and frame.batch_id not in images:
                 images[frame.batch_id] = extract_frame(gst_buffer, frame)
 
@@ -359,21 +423,23 @@ class PlateRecognitionProcessor:
 
                 check_result, img_list = check_plate_square(frame_align)
                 processed_images = [frame_align]
+                is_two_line = False
                 if check_result is not None:
                     processed_images = img_list
+                    is_two_line = True
 
-                # Send each processed image to OCR queue
-                for i, img in enumerate(processed_images):
-                    if img is not None and self._input_queue is not None:
-                        self._total_plates += 1
-                        request_id = f"{frame.batch_id}_{self._total_plates}_{i}"
-                        try:
-                            self._input_queue.put_nowait({
-                                "id": request_id,
-                                "image": img,
-                            })
-                        except Exception as e:
-                            print(f"[Plate] Queue full, skipping OCR: {e}")
+                # Send to OCR queue with tracking_id
+                if self._input_queue is not None:
+                    self._total_plates += 1
+                    try:
+                        self._input_queue.put_nowait({
+                            "id": f"{tracking_id}",
+                            "tracking_id": tracking_id,
+                            "images": processed_images,  # Send all parts together
+                            "is_two_line": is_two_line,
+                        })
+                    except Exception as e:
+                        print(f"[Plate] Queue full, skipping OCR: {e}")
 
         return Gst.PadProbeReturn.OK
 
@@ -384,6 +450,8 @@ class PlateRecognitionProcessor:
     def _process_ocr_results(self) -> None:
         """Background thread to process OCR results from output_queue."""
         print("[PlateRecognitionProcessor] OCR result thread started")
+        ocr_threshold = self._config.get("params", {}).get("ocr_confidence_threshold", 0.9)
+
         while not self._stop_result_thread.is_set():
             try:
                 if self._output_queue is None:
@@ -397,11 +465,20 @@ class PlateRecognitionProcessor:
                 confidence = result.get("confidence", 0.0)
                 error = result.get("error")
                 request_id = result.get("id", "unknown")
+                tracking_id = result.get("tracking_id")
 
                 if error:
                     print(f"[Plate OCR] Error {request_id}: {error}")
-                elif text:
-                    print(f"[Plate OCR] {request_id}: {text} ({confidence:.2%})")
+                elif text and tracking_id is not None:
+                    # Cache result if confidence meets threshold
+                    if confidence >= ocr_threshold:
+                        with self._ocr_cache_lock:
+                            # Update cache with new result (or keep better one)
+                            if tracking_id not in self._ocr_cache or confidence > self._ocr_cache[tracking_id][1]:
+                                self._ocr_cache[tracking_id] = (text, confidence)
+                        print(f"[Plate OCR] ID:{tracking_id} {text} ({confidence:.2%}) [cached]")
+                    else:
+                        print(f"[Plate OCR] ID:{tracking_id} {text} ({confidence:.2%}) [below threshold]")
 
             except Empty:
                 continue

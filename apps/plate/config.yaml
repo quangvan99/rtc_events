@@ -7,6 +7,28 @@ params:
   log_interval: 1.0
   visualize_keypoints: true
 
+  # OCR Configuration
+  ocr_engine_path: "data/license_plate/ocr/bz2_640/ppocr_dummy.engine"
+  ocr_dict_path: "data/license_plate/ocr/bz2_640/licence_plate_dict.txt"
+  ocr_queue_size: 100
+  ocr_input_shape: [2, 3, 48, 640]
+
+  # OSD Display Colors (RGBA normalized 0.0-1.0)
+  color_valid: [0.0, 1.0, 0.0, 1.0]      # Green - valid plate
+  color_invalid: [1.0, 0.5, 0.0, 1.0]    # Orange - invalid plate
+
+  # Keypoint visualization colors (RGBA)
+  keypoint_colors:
+    - [0.0, 1.0, 0.0, 1.0]    # Green - top-left
+    - [1.0, 1.0, 0.0, 1.0]    # Yellow - top-right
+    - [1.0, 0.0, 0.0, 1.0]    # Red - bottom-right
+    - [1.0, 0.0, 1.0, 1.0]    # Magenta - bottom-left
+  keypoint_radius: 8
+
+  # Display settings
+  border_width: 3
+  text_font_size: 14
+
 sink:
   enable: true
   type: filesink
@@ -36,8 +58,7 @@ elements:
   - type: nvinfer
     name: pgie_plate
     config_file: "data/license_plate/detect/infer.txt"
-    probes:
-      src: pgie_plate_probe
+
 
   - type: nvtracker
     name: tracker_plate

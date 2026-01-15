@@ -281,31 +281,56 @@ class PlateOCRWorker:
 
                     # Process the request
                     request_id = data.get("id", "unknown")
-                    image = data.get("image")
+                    tracking_id = data.get("tracking_id")
+                    images = data.get("images", [])  # List of images (1 or 2 parts)
+                    is_two_line = data.get("is_two_line", False)
 
-                    if image is None:
+                    # Support legacy single image format
+                    if not images and data.get("image") is not None:
+                        images = [data.get("image")]
+
+                    if not images:
                         self.output_queue.put({
                             "id": request_id,
+                            "tracking_id": tracking_id,
                             "text": "",
                             "confidence": 0.0,
-                            "error": "No image provided"
+                            "error": "No images provided"
                         })
                         continue
 
-                    # Run OCR
+                    # Run OCR on all images
                     try:
-                        text, confidence = engine.recognize(image)
+                        texts = []
+                        confidences = []
+                        for img in images:
+                            if img is not None:
+                                text, conf = engine.recognize(img)
+                                texts.append(text)
+                                confidences.append(conf)
+
+                        # Combine results for 2-line plates
+                        if is_two_line and len(texts) == 2:
+                            # Format: "TOP-BOTTOM" (e.g., "99A-51567")
+                            combined_text = f"{texts[0]}-{texts[1]}"
+                            avg_confidence = sum(confidences) / len(confidences)
+                        else:
+                            combined_text = texts[0] if texts else ""
+                            avg_confidence = confidences[0] if confidences else 0.0
+
                         self.output_queue.put({
                             "id": request_id,
-                            "text": text,
-                            "confidence": confidence,
+                            "tracking_id": tracking_id,
+                            "text": combined_text,
+                            "confidence": avg_confidence,
                             "error": None
                         })
-                        print(f"[PID {os.getpid()}] Processed {request_id}: {text} ({confidence:.2%})")
+                        print(f"[PID {os.getpid()}] Processed {request_id}: {combined_text} ({avg_confidence:.2%})")
 
                     except Exception as e:
                         self.output_queue.put({
                             "id": request_id,
+                            "tracking_id": tracking_id,
                             "text": "",
                             "confidence": 0.0,
                             "error": str(e)
