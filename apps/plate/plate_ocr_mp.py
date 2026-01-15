@@ -64,7 +64,7 @@ class PlateOCREngine:
     def __init__(self, engine_path, dict_path, input_shape=(2, 3, 48, 640)):
         import tensorrt as trt
         import pycuda.driver as cuda
-        import pycuda.autoinit
+        # Note: pycuda.autoinit removed - CUDA context must be initialized externally
 
         self.input_shape = input_shape
         self.batch_size = input_shape[0]
@@ -216,6 +216,9 @@ class PlateOCRWorker:
         worker.join()
     """
 
+    # Use spawn context for CUDA compatibility
+    _ctx = mp.get_context("spawn")
+
     def __init__(
         self,
         input_queue: mp.Queue,
@@ -232,82 +235,100 @@ class PlateOCRWorker:
         self.input_shape = input_shape
         self.poll_interval = poll_interval
         self.process: Optional[mp.Process] = None
-        self._stop_event = mp.Event()
+        self._stop_event = self._ctx.Event()
 
     def _run(self):
         """Worker process main loop"""
         print(f"[PID {os.getpid()}] OCR Worker starting...")
 
-        # Initialize engine inside process (CUDA context must be created in same process)
-        engine = PlateOCREngine(
-            engine_path=self.engine_path,
-            dict_path=self.dict_path,
-            input_shape=self.input_shape
-        )
+        # Initialize CUDA context explicitly for this process
+        ctx = None
+        try:
+            import pycuda.driver as cuda
+            cuda.init()
+            device = cuda.Device(0)
+            ctx = device.make_context()
+            print(f"[PID {os.getpid()}] CUDA context created on device: {device.name()}")
+        except Exception as e:
+            print(f"[PID {os.getpid()}] Failed to init CUDA: {e}")
+            return
 
-        print(f"[PID {os.getpid()}] OCR Worker ready, waiting for images...")
+        engine = None
+        try:
+            # Initialize engine inside process (CUDA context must be created in same process)
+            engine = PlateOCREngine(
+                engine_path=self.engine_path,
+                dict_path=self.dict_path,
+                input_shape=self.input_shape
+            )
 
-        while not self._stop_event.is_set():
-            try:
-                # Non-blocking check with timeout
-                if self.input_queue.empty():
-                    time.sleep(self.poll_interval)
-                    continue
+            print(f"[PID {os.getpid()}] OCR Worker ready, waiting for images...")
 
-                # Get data from queue
-                data = self.input_queue.get(timeout=self.poll_interval)
-
-                # None signals shutdown
-                if data is None:
-                    print(f"[PID {os.getpid()}] Received shutdown signal")
-                    break
-
-                # Process the request
-                request_id = data.get("id", "unknown")
-                image = data.get("image")
-
-                if image is None:
-                    self.output_queue.put({
-                        "id": request_id,
-                        "text": "",
-                        "confidence": 0.0,
-                        "error": "No image provided"
-                    })
-                    continue
-
-                # Run OCR
+            while not self._stop_event.is_set():
                 try:
-                    text, confidence = engine.recognize(image)
-                    self.output_queue.put({
-                        "id": request_id,
-                        "text": text,
-                        "confidence": confidence,
-                        "error": None
-                    })
-                    print(f"[PID {os.getpid()}] Processed {request_id}: {text} ({confidence:.2%})")
+                    # Non-blocking check with timeout
+                    if self.input_queue.empty():
+                        time.sleep(self.poll_interval)
+                        continue
 
+                    # Get data from queue
+                    data = self.input_queue.get(timeout=self.poll_interval)
+
+                    # None signals shutdown
+                    if data is None:
+                        print(f"[PID {os.getpid()}] Received shutdown signal")
+                        break
+
+                    # Process the request
+                    request_id = data.get("id", "unknown")
+                    image = data.get("image")
+
+                    if image is None:
+                        self.output_queue.put({
+                            "id": request_id,
+                            "text": "",
+                            "confidence": 0.0,
+                            "error": "No image provided"
+                        })
+                        continue
+
+                    # Run OCR
+                    try:
+                        text, confidence = engine.recognize(image)
+                        self.output_queue.put({
+                            "id": request_id,
+                            "text": text,
+                            "confidence": confidence,
+                            "error": None
+                        })
+                        print(f"[PID {os.getpid()}] Processed {request_id}: {text} ({confidence:.2%})")
+
+                    except Exception as e:
+                        self.output_queue.put({
+                            "id": request_id,
+                            "text": "",
+                            "confidence": 0.0,
+                            "error": str(e)
+                        })
+
+                except Empty:
+                    continue
                 except Exception as e:
-                    self.output_queue.put({
-                        "id": request_id,
-                        "text": "",
-                        "confidence": 0.0,
-                        "error": str(e)
-                    })
+                    print(f"[PID {os.getpid()}] Error: {e}")
+                    continue
 
-            except Empty:
-                continue
-            except Exception as e:
-                print(f"[PID {os.getpid()}] Error: {e}")
-                continue
-
-        # Cleanup
-        engine.destroy()
-        print(f"[PID {os.getpid()}] OCR Worker stopped")
+        finally:
+            # Cleanup
+            if engine:
+                engine.destroy()
+            if ctx:
+                ctx.pop()
+            print(f"[PID {os.getpid()}] OCR Worker stopped")
 
     def start(self):
         """Start the worker process"""
         self._stop_event.clear()
-        self.process = mp.Process(target=self._run)
+        self.process = self._ctx.Process(target=self._run)
         self.process.start()
         return self
 

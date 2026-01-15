@@ -5,8 +5,13 @@ All-in-one module for plate detection with keypoint visualization.
 Auto-registered with ProcessorRegistry using @register decorator.
 """
 
+import multiprocessing as mp
+import os
+import threading
 import time
+import uuid
 from ctypes import c_float, sizeof
+from queue import Empty
 from typing import Callable, Dict, Any, List, Optional, Tuple
 
 import cv2
@@ -19,6 +24,7 @@ from gi.repository import Gst
 from src.processor_registry import ProcessorRegistry
 from src.sinks.base_sink import BaseSink
 from src.common import BatchIterator, get_batch_meta, fps_probe_factory
+from apps.plate.plate_ocr_mp import PlateOCRWorker
 import pyds
 
 # =============================================================================
@@ -255,6 +261,10 @@ class PlateRecognitionProcessor:
             visualize_keypoints: true
     """
 
+    # Default OCR paths
+    DEFAULT_ENGINE_PATH = "/home/mq/disk2T/quangnv/face/data/license_plate/ocr/bz2_640/ppocr_dummy.engine"
+    DEFAULT_DICT_PATH = "/home/mq/disk2T/quangnv/face/data/license_plate/ocr/bz2_640/licence_plate_dict.txt"
+
     def __init__(self, source_mapper=None):
         self._config: Dict[str, Any] = {}
         self._sink: Optional[BaseSink] = None
@@ -263,6 +273,14 @@ class PlateRecognitionProcessor:
         # Stats
         self._total_plates = 0
         self._total_frames = 0
+        self._total_ocr_results = 0
+
+        # OCR multiprocessing
+        self._input_queue: Optional[mp.Queue] = None
+        self._output_queue: Optional[mp.Queue] = None
+        self._ocr_worker: Optional[PlateOCRWorker] = None
+        self._result_thread: Optional[threading.Thread] = None
+        self._stop_result_thread = threading.Event()
 
     @property
     def name(self) -> str:
@@ -274,15 +292,37 @@ class PlateRecognitionProcessor:
         self._sink = sink
         params = config.get("params", {})
 
+        # OCR configuration
+        engine_path = params.get("ocr_engine_path", self.DEFAULT_ENGINE_PATH)
+        dict_path = params.get("ocr_dict_path", self.DEFAULT_DICT_PATH)
+        queue_size = params.get("ocr_queue_size", 100)
+        input_shape = tuple(params.get("ocr_input_shape", (2, 3, 48, 640)))
+
+        # Create queues using spawn context for CUDA compatibility
+        spawn_ctx = mp.get_context("spawn")
+        self._input_queue = spawn_ctx.Queue(maxsize=queue_size)
+        self._output_queue = spawn_ctx.Queue(maxsize=queue_size)
+
+        # Create OCR worker
+        self._ocr_worker = PlateOCRWorker(
+            input_queue=self._input_queue,
+            output_queue=self._output_queue,
+            engine_path=engine_path,
+            dict_path=dict_path,
+            input_shape=input_shape,
+        )
+
         print(f"[PlateRecognitionProcessor] Setup complete "
               f"(point_thresh={params.get('point_confidence_threshold', 0.5)}, "
-              f"visualize_keypoints={params.get('visualize_keypoints', True)})")
+              f"visualize_keypoints={params.get('visualize_keypoints', True)}, "
+              f"ocr_engine={os.path.basename(engine_path)})")
 
     def _get_stats(self) -> dict:
         """Return stats dict for FPSMonitor."""
         return {
             "plates": self._total_plates,
             "frames": self._total_frames,
+            "ocr_results": self._total_ocr_results,
         }
 
     def get_probes(self) -> Dict[str, Callable]:
@@ -303,43 +343,117 @@ class PlateRecognitionProcessor:
     # -------------------------------------------------------------------------
 
     def _pgie_probe(self, pad, info, user_data) -> Gst.PadProbeReturn:
-        """Main probe: Extract keypoints, visualize with OSD, update display."""
+        """Main probe: Extract keypoints, visualize with OSD, send to OCR."""
         gst_buffer = info.get_buffer()
         batch = get_batch_meta(gst_buffer)
         images = {}
         for frame, obj in BatchIterator(batch):
             keypoints = extract_keypoints(obj, point_threshold=self._config.get("params", {}).get("point_confidence_threshold", 0.5))
-            if keypoints is not None and frame.batch_id not in images:            
+            if keypoints is not None and frame.batch_id not in images:
                 images[frame.batch_id] = extract_frame(gst_buffer, frame)
 
             if keypoints is not None and images.get(frame.batch_id) is not None:
                 frame_align = warp_plate(images[frame.batch_id], keypoints)
+                if frame_align is None:
+                    continue
+
                 check_result, img_list = check_plate_square(frame_align)
                 processed_images = [frame_align]
                 if check_result is not None:
                     processed_images = img_list
-                
-                            
+
+                # Send each processed image to OCR queue
+                for i, img in enumerate(processed_images):
+                    if img is not None and self._input_queue is not None:
+                        self._total_plates += 1
+                        request_id = f"{frame.batch_id}_{self._total_plates}_{i}"
+                        try:
+                            self._input_queue.put_nowait({
+                                "id": request_id,
+                                "image": img,
+                            })
+                        except Exception as e:
+                            print(f"[Plate] Queue full, skipping OCR: {e}")
+
         return Gst.PadProbeReturn.OK
 
     # -------------------------------------------------------------------------
     # Lifecycle
     # -------------------------------------------------------------------------
 
+    def _process_ocr_results(self) -> None:
+        """Background thread to process OCR results from output_queue."""
+        print("[PlateRecognitionProcessor] OCR result thread started")
+        while not self._stop_result_thread.is_set():
+            try:
+                if self._output_queue is None:
+                    time.sleep(0.1)
+                    continue
+
+                result = self._output_queue.get(timeout=0.1)
+                self._total_ocr_results += 1
+
+                text = result.get("text", "")
+                confidence = result.get("confidence", 0.0)
+                error = result.get("error")
+                request_id = result.get("id", "unknown")
+
+                if error:
+                    print(f"[Plate OCR] Error {request_id}: {error}")
+                elif text:
+                    print(f"[Plate OCR] {request_id}: {text} ({confidence:.2%})")
+
+            except Empty:
+                continue
+            except Exception as e:
+                print(f"[Plate OCR] Result thread error: {e}")
+                continue
+
+        print("[PlateRecognitionProcessor] OCR result thread stopped")
+
     def on_pipeline_built(self, pipeline: Gst.Pipeline, branch_info: Any) -> None:
         print(f"[PlateRecognitionProcessor] Pipeline built, branch: {branch_info.name}")
 
     def on_start(self) -> None:
+        """Start OCR worker and result processing thread."""
+        # Start OCR worker process
+        if self._ocr_worker:
+            self._ocr_worker.start()
+            print("[PlateRecognitionProcessor] OCR worker started")
+
+        # Start result processing thread
+        self._stop_result_thread.clear()
+        self._result_thread = threading.Thread(
+            target=self._process_ocr_results,
+            daemon=True,
+            name="PlateOCRResultThread"
+        )
+        self._result_thread.start()
+
         print("[PlateRecognitionProcessor] Started")
 
     def on_stop(self) -> None:
-        print(f"[PlateRecognitionProcessor] Stopped - plates={self._total_plates}, frames={self._total_frames}")
+        """Stop OCR worker and result processing thread."""
+        # Stop result thread
+        self._stop_result_thread.set()
+        if self._result_thread and self._result_thread.is_alive():
+            self._result_thread.join(timeout=2.0)
+
+        # Stop OCR worker
+        if self._ocr_worker:
+            self._ocr_worker.stop()
+            self._ocr_worker.join(timeout=5.0)
+            print("[PlateRecognitionProcessor] OCR worker stopped")
+
+        print(f"[PlateRecognitionProcessor] Stopped - plates={self._total_plates}, "
+              f"frames={self._total_frames}, ocr_results={self._total_ocr_results}")
 
     def get_stats(self) -> Optional[Dict[str, Any]]:
         """Return processor statistics."""
         return {
             "total_plates": self._total_plates,
             "total_frames": self._total_frames,
+            "total_ocr_results": self._total_ocr_results,
         }
 
     def set_source_mapper(self, source_mapper) -> None:
