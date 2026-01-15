@@ -13,7 +13,7 @@ muxer:
   height: 1080
   nvbuf-memory-type: 0  # NVBUF_MEM_CUDA_UNIFIED - required for numpy frame access
   batched-push-timeout: 40000
-  live-source: 1
+  live-source: 0
 
 elements:
   - type: queue

@@ -157,42 +157,31 @@ class MultibranchCameraManager:
                 source_id = self._mapper.add(camera_id, uri)
                 bin_elem = Gst.Bin.new(f"cam_{camera_id}")
 
-                # Create source using uridecodebin pattern (like reference implementation)
-                # uridecodebin -> nvvideoconvert -> capsfilter -> tee
-                uridecodebin = Gst.ElementFactory.make("uridecodebin", f"uridecode_{camera_id}")
-                uridecodebin.set_property("uri", uri)
-
-                nvvidconv = Gst.ElementFactory.make("nvvideoconvert", f"nvconv_{camera_id}")
-                nvvidconv.set_property("nvbuf-memory-type", 0)
-
-                capsfilter = Gst.ElementFactory.make("capsfilter", f"srccaps_{camera_id}")
-                capsfilter.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM), format=NV12"))
+                # Create source using nvurisrcbin (NVIDIA hardware-accelerated)
+                # nvurisrcbin -> tee (direct, no conversion needed)
+                nvurisrcbin = Gst.ElementFactory.make("nvurisrcbin", f"nvurisrc_{camera_id}")
+                nvurisrcbin.set_property("uri", uri)
+                nvurisrcbin.set_property("gpu-id", self._gpu_id)
 
                 tee = Gst.ElementFactory.make("tee", f"tee_{camera_id}")
                 tee.set_property("allow-not-linked", True)
 
-                bin_elem.add(uridecodebin)
-                bin_elem.add(nvvidconv)
-                bin_elem.add(capsfilter)
+                bin_elem.add(nvurisrcbin)
                 bin_elem.add(tee)
 
-                # Link static elements
-                nvvidconv.link(capsfilter)
-                capsfilter.link(tee)
+                # Connect pad-added for nvurisrcbin -> tee (video pads only: vsrc_*)
+                def on_nvurisrc_pad_added(_s, pad, t):
+                    pad_name = pad.get_name()
+                    if pad_name.startswith("vsrc_"):
+                        sink = t.get_static_pad("sink")
+                        if not sink.is_linked():
+                            ret = pad.link(sink)
+                            if ret == Gst.PadLinkReturn.OK:
+                                logger.info(f"[CAM-MANAGER] nvurisrcbin {pad_name} linked to tee for {camera_id}")
+                            else:
+                                logger.warning(f"[CAM-MANAGER] Failed to link {pad_name} to tee: {ret}")
 
-                # Connect pad-added for uridecodebin -> nvvidconv
-                def on_uridecode_pad_added(_s, pad, conv):
-                    caps = pad.get_current_caps()
-                    if caps:
-                        structure = caps.get_structure(0)
-                        if structure.get_name().startswith("video"):
-                            sink = conv.get_static_pad("sink")
-                            if not sink.is_linked():
-                                ret = pad.link(sink)
-                                if ret == Gst.PadLinkReturn.OK:
-                                    logger.info(f"[CAM-MANAGER] uridecodebin linked to nvvidconv for {camera_id}")
-
-                uridecodebin.connect("pad-added", on_uridecode_pad_added, nvvidconv)
+                nvurisrcbin.connect("pad-added", on_nvurisrc_pad_added, tee)
 
                 # Create ghost pad from tee src for external access
                 ghost_src = Gst.GhostPad.new_no_target("src", Gst.PadDirection.SRC)
