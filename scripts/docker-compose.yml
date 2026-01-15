@@ -33,7 +33,7 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      - GST_DEBUG=${GST_DEBUG:-2}
+      - GST_DEBUG=${GST_DEBUG:-2,v4l2*:1}
       - PYTHONUNBUFFERED=1
       - DISPLAY=${DISPLAY:-:0}
       - WS_SERVER=${WS_SERVER:-192.168.6.16}

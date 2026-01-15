@@ -167,6 +167,9 @@ class PipelineBuilder:
                 self._configure_tracker(elem, path)
             elif elem_type == "nvdsanalytics":
                 elem.set_property("config-file", path)
+        elif elem_type == "nvdsanalytics":
+            # Auto-generate config from branch params if config_file not specified
+            self._configure_nvdsanalytics(elem, prefix)
 
         self.pipeline.add(elem)
         return elem
@@ -191,6 +194,39 @@ class PipelineBuilder:
                 if key in ("tracker-width", "tracker-height", "gpu-id"):
                     val = int(val)
                 tracker.set_property(key, val)
+
+    def _configure_nvdsanalytics(self, elem: Gst.Element, branch_name: str) -> None:
+        """Configure nvdsanalytics using config from processor."""
+        # Get config path from processor if available
+        processor = self.processors.get(branch_name)
+        if processor and hasattr(processor, "get_analytics_config_path"):
+            config_path = processor.get_analytics_config_path()
+            if os.path.exists(config_path):
+                elem.set_property("config-file", config_path)
+                logger.info(f"[nvdsanalytics] Using config: {config_path}")
+                return
+
+        # Fallback: generate from branch config
+        branch_cfg = self.config.get("branches", {}).get(branch_name, {})
+        params = branch_cfg.get("params", {})
+        cameras = params.get("cameras", {})
+
+        if not cameras:
+            logger.warning(f"No cameras config found for nvdsanalytics in branch {branch_name}")
+            return
+
+        from apps.area_monitoring.roi_config_generator import generate_roi_config_content
+
+        first_cam_id, first_cam_cfg = next(iter(cameras.items()))
+        content = generate_roi_config_content(first_cam_cfg, stream_id=0)
+
+        config_path = f"data/roi/{branch_name}_analytics.txt"
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, "w") as f:
+            f.write(content)
+
+        elem.set_property("config-file", config_path)
+        logger.info(f"[nvdsanalytics] Auto-configured: {config_path}")
 
     def set_bus_callback(self, callback: Callable) -> None:
         """Set bus message callback."""

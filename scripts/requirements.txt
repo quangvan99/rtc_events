@@ -3,3 +3,5 @@ onnxruntime
 scikit-image
 fastapi 
 uvicorn
+pycuda
+tensorrt==10.3.0

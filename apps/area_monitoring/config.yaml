@@ -17,6 +17,14 @@ params:
           polygon: [[100, 100], [1000, 100], [1000, 1000], [100, 1000]]
           class_id: [0]
           inverse: false
+    cam_test_2:
+      config_width: 1920
+      config_height: 1080
+      roi_filtering:
+        - roi_id: roi1
+          polygon: [[100, 100], [600, 100], [600, 600], [100, 600]]
+          class_id: [0]
+          inverse: false
 
 sink:
   enable: true
@@ -50,7 +58,6 @@ elements:
     config_file: "data/face/models/NvDCF/config_tracker.txt"
   - type: nvdsanalytics
     name: analytics
-    config_file: "data/roi/config_analytics.txt"
     probes: {src: analytics_probe}
   - type: nvmultistreamtiler
     properties: { rows: 2, columns: 2, width: 1920, height: 1080 }

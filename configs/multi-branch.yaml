@@ -6,6 +6,6 @@ pipeline:
   name: multi-branch-tee-pipeline
   branches:
     detection: apps/detection/config.yaml
-    # recognition: apps/face/config.yaml
-    # plate_recognition: apps/plate/config.yaml
-    # area_monitoring: apps/area_monitoring/config.yaml
+    recognition: apps/face/config.yaml
+    plate_recognition: apps/plate/config.yaml
+    area_monitoring: apps/area_monitoring/config.yaml
