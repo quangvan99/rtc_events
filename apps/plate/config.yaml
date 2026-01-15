@@ -1,0 +1,60 @@
+# License Plate Recognition Branch Configuration
+# Used with branch_type: "plate_recognition"
+
+params:
+  point_confidence_threshold: 0.5
+  ocr_confidence_threshold: 0.9
+  log_interval: 1.0
+  visualize_keypoints: true
+
+sink:
+  enable: true
+  type: filesink
+  properties:
+    location: "${OUTPUT_DIR:data/license_plate/output/plate_output.avi}"
+    sync: false
+    qos: false
+
+muxer:
+  batch-size: 8
+  width: 1920
+  height: 1080
+  nvbuf-memory-type: 0
+  batched-push-timeout: 40000
+  live-source: 1
+
+elements:
+  - type: queue
+    properties:
+      max-size-buffers: 2
+  - type: nvvideoconvert
+    name: pre_tiler_conv
+    properties: { nvbuf-memory-type: 3 }  # CUDA_UNIFIED for frame access
+  - type: capsfilter
+    name: rgba_caps
+    caps: "video/x-raw(memory:NVMM), format=RGBA"
+  - type: nvinfer
+    name: pgie_plate
+    config_file: "data/license_plate/detect/infer.txt"
+    probes:
+      src: pgie_plate_probe
+
+  - type: nvtracker
+    name: tracker_plate
+    config_file: "data/license_plate/NvDCF/config_tracker.txt"
+    probes:
+      src: tracker_plate_probe
+
+  - type: nvmultistreamtiler
+    properties:
+      rows: 2
+      columns: 2
+      width: 1920
+      height: 1080
+
+  - type: nvdsosd
+    properties:
+      process-mode: 0
+      display-text: 1
+    probes:
+      src: plate_fps_probe
