@@ -52,7 +52,7 @@ elements:
     caps: "video/x-raw(memory:NVMM), format=RGBA"
   - type: nvinfer
     name: pgie
-    config_file: "data/roi/config_pgie_weapon.txt"
+    config_file: "data/hat/config_pgie_hat.txt"
   - type: nvtracker
     name: tracker
     config_file: "data/face/models/NvDCF/config_tracker.txt"

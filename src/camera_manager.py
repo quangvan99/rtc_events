@@ -202,32 +202,36 @@ class MultibranchCameraManager:
                     # For file sources, use uridecodebin with proper state handling
                     # Create an event to signal when pad linking is complete
                     pad_linked_event = threading.Event()
+                    # Use threading.Lock for thread-safe pad linking (callback from GStreamer thread)
+                    pad_link_lock = threading.Lock()
 
                     source = Gst.ElementFactory.make("uridecodebin", f"uridecodebin_{camera_id}")
                     source.set_property("uri", uri)
                     bin_elem.add(source)
 
                     # Connect pad-added for uridecodebin -> tee (video pads only)
-                    def on_uridecodebin_pad_added(_s, pad, t, cam_id, linked, event):
-                        if linked["done"]:
-                            return
-                        caps = pad.get_current_caps()
-                        if not caps:
-                            caps = pad.query_caps(None)
-                        if caps:
-                            struct = caps.get_structure(0)
-                            if struct and struct.get_name().startswith("video"):
-                                sink = t.get_static_pad("sink")
-                                if sink and not sink.is_linked():
-                                    ret = pad.link(sink)
-                                    if ret == Gst.PadLinkReturn.OK:
-                                        linked["done"] = True
-                                        event.set()  # Signal that pad is linked
-                                        logger.info(f"[CAM-MANAGER] uridecodebin linked to tee for {cam_id}")
-                                    else:
-                                        logger.warning(f"[CAM-MANAGER] Failed to link uridecodebin to tee: {ret}")
+                    # Thread-safe: callback is invoked from GStreamer streaming thread
+                    def on_uridecodebin_pad_added(_s, pad, t, cam_id, linked, event, lock):
+                        with lock:
+                            if linked["done"]:
+                                return
+                            caps = pad.get_current_caps()
+                            if not caps:
+                                caps = pad.query_caps(None)
+                            if caps:
+                                struct = caps.get_structure(0)
+                                if struct and struct.get_name().startswith("video"):
+                                    sink = t.get_static_pad("sink")
+                                    if sink and not sink.is_linked():
+                                        ret = pad.link(sink)
+                                        if ret == Gst.PadLinkReturn.OK:
+                                            linked["done"] = True
+                                            event.set()  # Signal that pad is linked
+                                            logger.info(f"[CAM-MANAGER] uridecodebin linked to tee for {cam_id}")
+                                        else:
+                                            logger.warning(f"[CAM-MANAGER] Failed to link uridecodebin to tee: {ret}")
 
-                    source.connect("pad-added", on_uridecodebin_pad_added, tee, camera_id, linked_state, pad_linked_event)
+                    source.connect("pad-added", on_uridecodebin_pad_added, tee, camera_id, linked_state, pad_linked_event, pad_link_lock)
                     logger.info(f"[CAM-MANAGER] Using uridecodebin for file source: {camera_id}")
 
                 else:
@@ -258,9 +262,8 @@ class MultibranchCameraManager:
                     source.connect("pad-added", on_uridecodebin_pad_added, tee)
                     logger.info(f"[CAM-MANAGER] Using uridecodebin for file source: {camera_id}")
 
-                # Create ghost pad from tee src for external access
-                ghost_src = Gst.GhostPad.new_no_target("src", Gst.PadDirection.SRC)
-                bin_elem.add_pad(ghost_src)
+                # Note: Ghost pad for external access removed - it was unused and could cause issues
+                # Each branch gets its own ghost pad via _link_branch
 
                 self.pipeline.add(bin_elem)
 
@@ -309,8 +312,9 @@ class MultibranchCameraManager:
                         logger.info(f"[CAM-MANAGER] Waiting for uridecodebin pad linking...")
                         if pad_linked_event.wait(timeout=5.0):
                             logger.info(f"[CAM-MANAGER] uridecodebin pad linked successfully")
+                            time.sleep(0.5)  # Brief stabilization after pad link
                         else:
-                            logger.warning(f"[CAM-MANAGER] Timeout waiting for uridecodebin pad linking")
+                            logger.warning(f"[CAM-MANAGER] Timeout waiting for uridecodebin pad linking - proceeding anyway")
                     else:
                         time.sleep(1.0)  # Wait for decoder to initialize
 
@@ -399,23 +403,21 @@ class MultibranchCameraManager:
                     for b in branches:
                         self._update_batch_size(b)
 
-                    # For file sources, pad linking already happened during PAUSED state sync
-                    # Just resume pipeline - the camera bin will follow automatically as a child
+                    # Unified state transition order for both file and RTSP:
+                    # 1. Resume pipeline to PLAYING first
+                    # 2. Then sync camera bin to PLAYING (as child of pipeline)
+                    # This prevents race conditions with nvstreammux
                     if is_file:
-                        # Sync camera bin to PLAYING BEFORE resuming pipeline
-                        # This ensures all internal elements are ready
-                        logger.info(f"[CAM-MANAGER] Syncing camera bin to PLAYING (file source)")
-                        bin_elem.set_state(Gst.State.PLAYING)
-                        ret, _, _ = bin_elem.get_state(2 * Gst.SECOND)
-                        if ret == Gst.StateChangeReturn.FAILURE:
-                            logger.warning(f"[CAM-MANAGER] Camera bin PLAYING sync warning")
-
-                        # Now resume pipeline
-                        logger.info(f"[CAM-MANAGER] Resuming pipeline to PLAYING")
+                        logger.info(f"[CAM-MANAGER] Resuming pipeline to PLAYING (file source)")
                         self.pipeline.set_state(Gst.State.PLAYING)
                         ret, _, _ = self.pipeline.get_state(STATE_CHANGE_TIMEOUT)
                         if ret == Gst.StateChangeReturn.FAILURE:
                             logger.warning(f"[CAM-MANAGER] Pipeline resume returned FAILURE (may still work)")
+
+                        # Now sync camera bin incrementally (safer than direct set_state)
+                        logger.info(f"[CAM-MANAGER] Syncing camera bin to PLAYING (file source)")
+                        if not self._incremental_state_sync(bin_elem, Gst.State.PLAYING):
+                            logger.warning(f"[CAM-MANAGER] Camera bin PLAYING sync warning")
                     else:
                         # For RTSP sources, resume pipeline first then sync camera bin
                         logger.info(f"[CAM-MANAGER] Resuming pipeline to PLAYING")
@@ -758,17 +760,42 @@ class MultibranchCameraManager:
         return self._mapper
 
     def kill_all(self) -> int:
-        """Remove all cameras."""
+        """Remove all cameras - requires pipeline restart to add cameras again.
+
+        Note: Due to DeepStream/CUDA buffer management, killing all cameras
+        while pipeline is running causes CUDA errors. For clean restart,
+        use stop() then restart the pipeline process.
+        """
         with self._lock:
-            for cam in self._cameras.values():
+            if not self._cameras:
+                return 0
+
+            # Set pipeline to NULL to properly release all CUDA resources
+            # This is the safest way to remove all cameras without CUDA errors
+            logger.info("[CAM-MANAGER] Setting pipeline to NULL for clean kill_all")
+            self.pipeline.set_state(Gst.State.NULL)
+            self.pipeline.get_state(10 * Gst.SECOND)
+            time.sleep(1.0)  # Allow CUDA resources to be released
+
+            for camera_id, cam in list(self._cameras.items()):
                 try:
-                    cam["bin"].set_state(Gst.State.NULL)
-                    cam["bin"].get_state(Gst.CLOCK_TIME_NONE)
+                    # Unlink from all branches and release mux pads
+                    for branch_name in list(cam["branch_pads"].keys()):
+                        self._unlink_branch(cam, branch_name, camera_id)
+
+                    # Remove bin from pipeline
                     self.pipeline.remove(cam["bin"])
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[CAM-MANAGER] kill_all error for {camera_id}: {e}")
+
             n = len(self._cameras)
             self._cameras.clear()
             self._mapper.clear()
+
+            # Transition pipeline back to READY (waiting for new cameras)
+            logger.info("[CAM-MANAGER] Setting pipeline to READY after kill_all")
+            self.pipeline.set_state(Gst.State.READY)
+            self.pipeline.get_state(STATE_CHANGE_TIMEOUT)
+
             self._last_op = time.time()
             return n
