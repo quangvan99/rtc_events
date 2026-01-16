@@ -9,3 +9,4 @@ pipeline:
     recognition: apps/face/config.yaml
     plate_recognition: apps/plate/config.yaml
     area_monitoring: apps/area_monitoring/config.yaml
+    fire_detection: apps/fire_detection/config.yaml
